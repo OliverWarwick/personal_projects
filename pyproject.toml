@@ -1,0 +1,144 @@
+[project]
+name = "personal-project"
+dynamic = ["version"]
+description = "Personal project"
+readme = "README.md"
+requires-python = ">=3.14"
+authors = [
+    { name = "Oliver Warwick" }
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-cov>=6.0.0",
+    "pytest-asyncio>=0.25.2",
+    "ruff>=0.9.3",
+    "pre-commit>=4.0.1",
+    "pyright>=1.1.400",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/personal_project/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/personal_project"]
+
+# Ruff configuration
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "PTH",    # flake8-use-pathlib
+    "SIM",    # flake8-simplify
+    "TID",    # flake8-tidy-imports
+    "TCH",    # flake8-type-checking
+    "S",      # flake8-bandit (security)
+    "PERF",   # Perflint (performance)
+    "FURB",   # refurb (modernization)
+    "PIE",    # flake8-pie (misc pythonic)
+    "T20",    # flake8-print (no leftover prints)
+    "ERA",    # eradicator (commented-out code)
+    "PL",     # Pylint rules (PLC, PLE, PLR, PLW)
+    "RET",    # flake8-return (consistent returns)
+    "ARG",    # flake8-unused-arguments
+    "FBT",    # flake8-boolean-trap
+    "DTZ",    # flake8-datetimez (timezone-aware)
+    "ICN",    # flake8-import-conventions
+    "PT",     # flake8-pytest-style
+    "D",      # pydocstyle (docstring conventions)
+    "RUF",    # Ruff-specific rules
+    "TRY",    # tryceratops (try/except best practices)
+    "RSE",    # raise statement hygiene
+    "LOG",    # logging conventions
+]
+ignore = [
+    "E501",   # Line too long (handled by formatter)
+    "D203",   # Incompatible with D211 (no-blank-line-before-class)
+    "D213",   # Incompatible with D212 (multi-line-summary-first-line)
+    "TRY003", # Long exception messages in raise (intentional descriptive msg pattern)
+]
+
+[tool.ruff.lint.pylint]
+max-args = 11
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",   # Use of assert
+    "S105",   # Possible hardcoded password assigned to variable
+    "S106",   # Possible hardcoded password assigned to argument
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--verbose",
+    "--cov=src/personal_project",
+    "--cov-report=term-missing",
+    "--cov-fail-under=80",
+]
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["src"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/.venv/*",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+
+# Pyright configuration
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = false
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version_provider = "scm"
+
+[dependency-groups]
+dev = [
+    "commitizen>=4.4.0",
+    "pip-audit>=2.10.0",
+]

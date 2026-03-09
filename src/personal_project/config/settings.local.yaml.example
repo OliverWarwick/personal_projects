@@ -1,0 +1,7 @@
+# Local Settings Override Example
+# Copy this file to settings.local.yaml and customize
+
+environment: development
+
+app:
+  log_level: DEBUG
