@@ -1,0 +1,32 @@
+# Tennis Court Booker Configuration
+#
+# venues: list of ClubSpark venue slugs to query by default when --venues is
+#         not passed on the command line.  Each slug is the path segment that
+#         appears in the booking URL:
+#         https://clubspark.lta.org.uk/{slug}/Booking/BookByDate
+#
+# valid_court_start_times: hours (0-23) that are considered relevant for
+#         availability queries.  Slots starting at other hours are filtered out
+#         unless the caller explicitly overrides this list via --hours.
+
+tennis_court_booker:
+  venues:
+    clubspark:
+      - burgess_park:
+        - venue: BurgessParkSouthwark
+      - southwark_park:
+        - venue: SouthwarkPark
+      - tanner_st:
+        - venue: TannerStPark
+    better_com:
+      - islington_indoor:
+        - venue: islington-tennis-centre
+        - activity: tennis-court-indoor
+
+  valid_court_start_times:
+    - 17
+    - 18
+    - 19
+    - 20
+    - 21
+

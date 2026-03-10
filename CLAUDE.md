@@ -33,6 +33,15 @@
 - All changes go via PR from a feature branch (main is protected)
 - Pre-commit hooks must pass: ruff, ruff-format, pyright, pip-audit, actionlint
 
+## Application Structure
+
+- Each app lives under `src/personal_project/apps/<app_name>/`
+- The console-script entry point for an app must be named **`run.py`** (not `cli.py`)
+  - Register it in `pyproject.toml` as `"personal_project.apps.<app_name>.run:main"`
+  - Keep argument parsing, async runners, and output formatting in `run.py`
+- Config for an app belongs in `src/personal_project/config/<app_name>.yaml`
+- Use `config.py` inside the app package to load and expose config values
+
 ## Dependencies
 
 - Package manager: uv

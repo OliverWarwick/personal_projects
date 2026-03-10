@@ -7,7 +7,15 @@ requires-python = ">=3.14"
 authors = [
     { name = "Oliver Warwick" }
 ]
-dependencies = []
+dependencies = [
+    "playwright>=1.49.0",
+    "keyring>=25.0.0",
+    "pyyaml>=6.0",
+    "pandas>=3.0.1",
+]
+
+[project.scripts]
+tennis-court-booker = "personal_project.apps.tennis_court_booker.run:main"
 
 [project.optional-dependencies]
 dev = [
@@ -87,6 +95,9 @@ max-args = 11
     "S105",   # Possible hardcoded password assigned to variable
     "S106",   # Possible hardcoded password assigned to argument
 ]
+"**/run.py" = [
+    "T201",   # print() is intentional in CLI run-script modules
+]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -104,6 +115,10 @@ addopts = [
     "--cov=src/personal_project",
     "--cov-report=term-missing",
     "--cov-fail-under=80",
+    "-m", "not integration",
+]
+markers = [
+    "integration: marks tests as integration tests that make real network requests (deselect with '-m \"not integration\"')",
 ]
 
 # Coverage configuration
@@ -140,5 +155,6 @@ version_provider = "scm"
 [dependency-groups]
 dev = [
     "commitizen>=4.4.0",
+    "pandas-stubs>=3.0.0.260204",
     "pip-audit>=2.10.0",
 ]
