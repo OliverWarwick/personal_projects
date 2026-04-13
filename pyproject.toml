@@ -20,7 +20,7 @@ tennis-court-booker = "personal_project.apps.tennis_court_booker.run:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.4",
-    "pytest-cov>=6.0.0",
+    "pytest-cov>=7.1.0",
     "pytest-asyncio>=0.25.2",
     "ruff>=0.9.3",
     "pre-commit>=4.0.1",
