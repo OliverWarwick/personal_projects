@@ -10,7 +10,7 @@ authors = [
 dependencies = [
     "playwright>=1.49.0",
     "keyring>=25.0.0",
-    "pyyaml>=6.0",
+    "pyyaml>=6.0.3",
     "pandas>=3.0.1",
 ]
 
