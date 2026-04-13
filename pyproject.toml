@@ -154,7 +154,7 @@ version_provider = "scm"
 
 [dependency-groups]
 dev = [
-    "commitizen>=4.4.0",
+    "commitizen>=4.13.10",
     "pandas-stubs>=3.0.0.260204",
     "pip-audit>=2.10.0",
 ]
