@@ -1,8 +1,9 @@
 """Domain models for the tennis court booker application.
 
-Defines the core data structures used to represent court slots and venue
-availability.  All models are immutable value objects implemented as frozen
-dataclasses, making them safe to cache, hash, and use as dictionary keys.
+Defines the core data structures used to represent court slots, venue
+availability, payment details, and booking results.  Most models are immutable
+value objects implemented as frozen dataclasses, making them safe to cache,
+hash, and use as dictionary keys.
 """
 
 from __future__ import annotations
@@ -199,3 +200,74 @@ class VenueAvailability:
             f"Available: {self.available_count}/{self.total_slots} slots\n"
             f"Courts: {', '.join(self.courts)}"
         )
+
+
+@dataclass(frozen=True)
+class CardDetails:
+    """Payment card details required to complete a court booking.
+
+    Holds the raw card data and billing address needed to tokenise a card with
+    the Opayo payment gateway and authorise the transaction.  Instances are
+    frozen to prevent accidental mutation of sensitive payment data.
+
+    Args:
+        card_number: The 16-digit PAN with no spaces, e.g. ``"4929000000006"``.
+        expiry_mmyy: Card expiry in ``MMYY`` format, e.g. ``"1225"`` for
+            December 2025.
+        security_code: The 3- or 4-digit CVV / security code on the back of
+            the card.
+        cardholder_name: Name as it appears on the card, e.g.
+            ``"Oliver Warwick"``.
+        billing_first_name: First name for the billing address.
+        billing_last_name: Last name for the billing address.
+        billing_address_line_one: First line of the billing address.
+        billing_city: Billing address city.
+        billing_postcode: Billing address postcode.
+        billing_address_line_two: Optional second line of the billing address.
+
+    """
+
+    card_number: str
+    expiry_mmyy: str
+    security_code: str
+    cardholder_name: str
+    billing_first_name: str
+    billing_last_name: str
+    billing_address_line_one: str
+    billing_city: str
+    billing_postcode: str
+    billing_address_line_two: str = ""
+
+
+@dataclass(frozen=True)
+class BookingResult:
+    """The outcome of a court booking attempt.
+
+    Returned by the service-layer booking functions to communicate whether
+    the booking succeeded and, if not, why it failed.
+
+    Args:
+        success: ``True`` when the court was successfully booked and a
+            confirmation reference was obtained.
+        reference: The booking confirmation reference or transaction UUID
+            returned by the payment provider on success.  ``None`` on failure.
+        error: Human-readable error message when :attr:`success` is ``False``.
+            ``None`` on success.
+
+    """
+
+    success: bool
+    reference: str | None = None
+    error: str | None = None
+
+    def __str__(self) -> str:
+        """Return a one-line summary of the booking outcome.
+
+        Returns:
+            ``"Booked — ref: <reference>"`` on success, or
+            ``"Failed — <error>"`` on failure.
+
+        """
+        if self.success:
+            return f"Booked — ref: {self.reference}"
+        return f"Failed — {self.error}"

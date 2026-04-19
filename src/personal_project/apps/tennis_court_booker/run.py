@@ -1,6 +1,6 @@
 """Run script for the tennis court booker application.
 
-Provides two sub-commands:
+Provides five sub-commands:
 
 ``availability``
     Print a formatted availability summary for one or more ClubSpark venues on
@@ -11,12 +11,35 @@ Provides two sub-commands:
     Check whether a specific court and time slot is still available at a single
     venue on a given date.
 
+``book``
+    Book a court slot at either a ClubSpark venue (pass ``--court``) or a
+    Better.com venue (pass ``--activity`` and ``--key``).
+
+    * ClubSpark: LTA credentials are loaded from the OS keyring automatically;
+      see ``clubspark-credentials set`` to store them first.
+    * Better.com: card details are loaded from the OS keyring automatically;
+      see ``card-credentials set`` to store them first.
+
+``card-credentials``
+    Manage the payment card details stored in the OS keyring.  Use
+    ``card-credentials set`` to interactively save card and billing details, and
+    ``card-credentials delete`` to remove them.
+
+``clubspark-credentials``
+    Manage the LTA account credentials stored in the OS keyring.  Use
+    ``clubspark-credentials set`` to save the LTA email and password, and
+    ``clubspark-credentials delete`` to remove them.
+
 Usage examples::
 
     uv run tennis-court-booker availability --date 2026-03-10
     uv run tennis-court-booker availability --date 2026-03-10 --venues BurgessParkSouthwark SouthwarkPark
     uv run tennis-court-booker availability --date 2026-03-10 --hours 17,18,19
     uv run tennis-court-booker check --date 2026-03-10 --venue BurgessParkSouthwark --court "Court 1" --time 18:00
+    uv run tennis-court-booker book --date 2026-03-14 --venue BurgessParkSouthwark --court "Crt 1" --time 19:00
+    uv run tennis-court-booker book --date 2026-03-10 --venue islington-tennis-centre --activity tennis-court-indoor --time 18:00 --key abc123
+    uv run tennis-court-booker clubspark-credentials set
+    uv run tennis-court-booker card-credentials set
 
 Entry point: ``tennis-court-booker`` (registered in ``pyproject.toml``).
 """
@@ -26,21 +49,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import datetime
+import getpass
 import sys
 from typing import TYPE_CHECKING
 
 import pandas as pd
 
+from personal_project.apps.tennis_court_booker.card_credentials import CardCredentialHelper
 from personal_project.apps.tennis_court_booker.config import (
     get_default_venue_configs,
     get_valid_court_start_times,
 )
-from personal_project.apps.tennis_court_booker.models import VenueConfig
+from personal_project.apps.tennis_court_booker.models import CardDetails, VenueConfig
 from personal_project.apps.tennis_court_booker.service import (
+    book_court_better,
+    book_court_clubspark,
     check_slot_availability,
     get_venue_availability,
     get_venue_availability_better,
 )
+from personal_project.clients.clubspark.credentials import ClubSparkCredentialHelper
 
 if TYPE_CHECKING:
     from personal_project.apps.tennis_court_booker.models import VenueAvailability
@@ -245,6 +273,201 @@ async def _run_check(
     print()
 
 
+def _run_card_credentials_set() -> None:
+    """Interactively prompt for card details and persist them to the OS keyring.
+
+    Prompts the user for each required card and billing address field using
+    :func:`input` (plain text for non-sensitive fields) or
+    :func:`getpass.getpass` (masked for card number, CVV, and expiry).  The
+    collected values are stored via :class:`~card_credentials.CardCredentialHelper`.
+
+    """
+    print("Enter your card details (sensitive fields will be hidden):")
+    print()
+    card = CardDetails(
+        card_number=getpass.getpass("  Card number (16 digits, no spaces): "),
+        expiry_mmyy=getpass.getpass("  Expiry (MMYY, e.g. 1225): "),
+        security_code=getpass.getpass("  CVV / security code: "),
+        cardholder_name=input("  Cardholder name (as on card): "),
+        billing_first_name=input("  Billing first name: "),
+        billing_last_name=input("  Billing last name: "),
+        billing_address_line_one=input("  Billing address line 1: "),
+        billing_address_line_two=input("  Billing address line 2 (optional, press Enter to skip): "),
+        billing_city=input("  Billing city: "),
+        billing_postcode=input("  Billing postcode: "),
+    )
+    CardCredentialHelper.set_card(card)
+    print()
+    print("Card details saved to the OS keyring.")
+
+
+def _run_card_credentials_delete() -> None:
+    """Remove all stored card details from the OS keyring after confirmation.
+
+    Prompts the user to confirm before deleting so that accidental invocations
+    do not silently erase stored credentials.
+
+    """
+    confirm = input("Delete stored card details from the OS keyring? [y/N]: ")
+    if confirm.strip().lower() == "y":
+        CardCredentialHelper.delete_card()
+        print("Card details deleted.")
+    else:
+        print("Aborted.")
+
+
+def _resolve_card() -> CardDetails:
+    """Load card details from the OS keyring (or env vars) and return them.
+
+    Delegates to :meth:`~card_credentials.CardCredentialHelper.get_card`.
+
+    Returns:
+        A fully-populated :class:`~models.CardDetails` instance.
+
+    Raises:
+        SystemExit: If no card details can be resolved from the keyring or
+            environment variables.
+
+    """
+    card = CardCredentialHelper.get_card()
+    if card is None:
+        print(
+            "Error: no card details found in the OS keyring or environment variables.\n"
+            "Run: tennis-court-booker card-credentials set",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return card
+
+
+def _resolve_clubspark_credentials() -> tuple[str, str]:
+    """Load LTA credentials from the OS keyring (or env vars) and return them.
+
+    Delegates to
+    :meth:`~personal_project.clients.clubspark.credentials.ClubSparkCredentialHelper.get_credentials`.
+
+    Returns:
+        An ``(email, password)`` tuple.
+
+    Raises:
+        SystemExit: If no credentials can be resolved from the keyring or
+            environment variables.
+
+    """
+    creds = ClubSparkCredentialHelper.get_credentials()
+    if creds is None:
+        print(
+            "Error: no ClubSpark/LTA credentials found in the OS keyring or environment variables.\n"
+            "Run: tennis-court-booker clubspark-credentials set",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return creds
+
+
+def _run_clubspark_credentials_set() -> None:
+    """Interactively prompt for LTA credentials and persist them to the OS keyring.
+
+    Prompts for email (plain text) and password (masked via
+    :func:`getpass.getpass`), then stores them using
+    :class:`~personal_project.clients.clubspark.credentials.ClubSparkCredentialHelper`.
+
+    """
+    print("Enter your LTA / ClubSpark account credentials:")
+    print()
+    email = input("  LTA email address: ")
+    password = getpass.getpass("  LTA password: ")
+    ClubSparkCredentialHelper.set_credentials(email, password)
+    print()
+    print("LTA credentials saved to the OS keyring.")
+
+
+def _run_clubspark_credentials_delete() -> None:
+    """Remove stored LTA credentials from the OS keyring after confirmation.
+
+    Prompts the user to confirm before deleting.
+
+    """
+    email = input("LTA email address to remove: ")
+    confirm = input(f"Delete stored credentials for '{email}'? [y/N]: ")
+    if confirm.strip().lower() == "y":
+        try:
+            ClubSparkCredentialHelper.delete_credentials(email)
+            print("LTA credentials deleted.")
+        except Exception as exc:
+            print(f"Error deleting credentials: {exc}", file=sys.stderr)
+    else:
+        print("Aborted.")
+
+
+async def _run_book_clubspark(
+    venue: str,
+    date: datetime.date,
+    court_name: str,
+    time: datetime.time,
+    email: str,
+    password: str,
+    card: CardDetails | None,
+) -> None:
+    """Attempt to book a specific ClubSpark court slot and print the result.
+
+    Args:
+        venue: ClubSpark venue slug.
+        date: The date of the slot.
+        court_name: Exact court name as shown in the booking grid.
+        time: The start time of the slot.
+        email: LTA account email address.
+        password: LTA account password.
+        card: Optional payment card details loaded from the OS keyring.
+            Required when the venue charges a booking fee.
+
+    """
+    header = f"Booking (ClubSpark): {venue}  '{court_name}'  {time.strftime('%H:%M')} on {date}"
+    print(header)
+    print("=" * len(header))
+    print()
+    try:
+        result = await book_court_clubspark(
+            venue, date, court_name, time,
+            email=email, password=password, card=card,
+        )
+        print(f"  {result}")
+    except Exception as exc:
+        print(f"  ERROR — {exc}")
+    print()
+
+
+async def _run_book(
+    venue: str,
+    activity: str,
+    date: datetime.date,
+    time: datetime.time,
+    composite_key: str,
+    card: CardDetails,
+) -> None:
+    """Attempt to book a specific Better.com court slot and print the result.
+
+    Args:
+        venue: Better.com venue slug.
+        activity: Better.com activity slug.
+        date: The date of the slot.
+        time: The start time of the slot.
+        composite_key: The composite key identifying the specific court slot.
+        card: Payment card and billing details.
+
+    """
+    header = f"Booking: {venue} / {activity}  {time.strftime('%H:%M')} on {date}"
+    print(header)
+    print("=" * len(header))
+    print()
+    try:
+        result = await book_court_better(venue, activity, date, time, composite_key, card)
+        print(f"  {result}")
+    except Exception as exc:
+        print(f"  ERROR — {exc}")
+    print()
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing helpers
 # ---------------------------------------------------------------------------
@@ -302,8 +525,8 @@ def _build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level argument parser.
 
     Returns:
-        A configured :class:`argparse.ArgumentParser` with ``availability``
-        and ``check`` sub-commands registered.
+        A configured :class:`argparse.ArgumentParser` with ``availability``,
+        ``check``, ``book``, and ``card-credentials`` sub-commands registered.
 
     """
     parser = argparse.ArgumentParser(
@@ -375,6 +598,85 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_parse_time_arg,
         metavar="HH:MM",
         help="Start time of the slot to verify (24-hour format, e.g. 18:00).",
+    )
+
+    # -- book sub-command ---------------------------------------------------
+    book = subparsers.add_parser(
+        "book",
+        help=(
+            "Book a court slot.  Pass --court for ClubSpark venues; "
+            "pass --activity and --key for Better.com venues."
+        ),
+    )
+    book.add_argument(
+        "--date",
+        required=True,
+        type=datetime.date.fromisoformat,
+        metavar="YYYY-MM-DD",
+        help="Date of the slot to book.",
+    )
+    book.add_argument(
+        "--venue",
+        required=True,
+        metavar="VENUE",
+        help="Venue slug, e.g. BurgessParkSouthwark or islington-tennis-centre.",
+    )
+    book.add_argument(
+        "--time",
+        required=True,
+        type=_parse_time_arg,
+        metavar="HH:MM",
+        help="Start time of the slot to book, e.g. 19:00.",
+    )
+    # ClubSpark-specific
+    book.add_argument(
+        "--court",
+        default=None,
+        metavar="COURT",
+        help="[ClubSpark] Exact court name, e.g. 'Crt 1'.  Required for ClubSpark venues.",
+    )
+    # Better.com-specific
+    book.add_argument(
+        "--activity",
+        default=None,
+        metavar="ACTIVITY",
+        help="[Better.com] Activity slug, e.g. tennis-court-indoor.  Required for Better.com venues.",
+    )
+    book.add_argument(
+        "--key",
+        default=None,
+        metavar="COMPOSITE_KEY",
+        help="[Better.com] Composite key for the specific court slot (from availability output).",
+    )
+
+    # -- card-credentials sub-command ---------------------------------------
+    creds = subparsers.add_parser(
+        "card-credentials",
+        help="Manage payment card details stored in the OS keyring.",
+    )
+    creds_sub = creds.add_subparsers(dest="creds_action", required=True)
+    creds_sub.add_parser(
+        "set",
+        help="Interactively save card and billing details to the OS keyring.",
+    )
+    creds_sub.add_parser(
+        "delete",
+        help="Remove stored card details from the OS keyring.",
+    )
+
+    # -- clubspark-credentials sub-command ----------------------------------
+    cs_creds = subparsers.add_parser(
+        "clubspark-credentials",
+        help="Manage LTA / ClubSpark account credentials stored in the OS keyring.",
+    )
+    cs_creds_sub = cs_creds.add_subparsers(dest="cs_creds_action", required=True)
+    cs_creds_sub.add_parser(
+        "set",
+        help="Interactively save LTA email and password to the OS keyring.",
+    )
+    cs_creds_sub.add_parser(
+        "delete",
+        help="Remove stored LTA credentials from the OS keyring.",
     )
 
     return parser
@@ -450,8 +752,38 @@ def main() -> None:
         venues = _resolve_venues(args.venues)
         hours = _resolve_hours(args.hours)
         asyncio.run(_run_availability(venues, args.date, hours))
-    else:
+    elif args.command == "check":
         asyncio.run(_run_check(args.venue, args.date, args.court, args.time))
+    elif args.command == "book":
+        if args.court is not None:
+            # ClubSpark booking
+            email, password = _resolve_clubspark_credentials()
+            card = CardCredentialHelper.get_card()
+            asyncio.run(
+                _run_book_clubspark(args.venue, args.date, args.court, args.time, email, password, card)
+            )
+        elif args.activity is not None and args.key is not None:
+            # Better.com booking
+            card = _resolve_card()
+            asyncio.run(
+                _run_book(args.venue, args.activity, args.date, args.time, args.key, card)
+            )
+        else:
+            print(
+                "Error: for ClubSpark venues pass --court; "
+                "for Better.com venues pass --activity and --key.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    elif args.command == "card-credentials":
+        if args.creds_action == "set":
+            _run_card_credentials_set()
+        else:
+            _run_card_credentials_delete()
+    elif args.cs_creds_action == "set":
+        _run_clubspark_credentials_set()
+    else:
+        _run_clubspark_credentials_delete()
 
 
 if __name__ == "__main__":

@@ -13,7 +13,13 @@ from unittest.mock import AsyncMock, patch
 import pandas as pd
 import pytest
 
-from personal_project.apps.tennis_court_booker.models import CourtSlot, VenueAvailability, VenueConfig
+from personal_project.apps.tennis_court_booker.models import (
+    BookingResult,
+    CardDetails,
+    CourtSlot,
+    VenueAvailability,
+    VenueConfig,
+)
 from personal_project.apps.tennis_court_booker.run import (
     _build_availability_frame,
     _build_parser,
@@ -21,10 +27,18 @@ from personal_project.apps.tennis_court_booker.run import (
     _parse_time_arg,
     _print_availability,
     _print_check_result,
+    _resolve_card,
+    _resolve_clubspark_credentials,
     _resolve_hours,
     _resolve_venues,
     _run_availability,
+    _run_book,
+    _run_book_clubspark,
+    _run_card_credentials_delete,
+    _run_card_credentials_set,
     _run_check,
+    _run_clubspark_credentials_delete,
+    _run_clubspark_credentials_set,
 )
 
 # ---------------------------------------------------------------------------
@@ -532,3 +546,409 @@ class TestRunCheck:
         ):
             await _run_check(VENUE, DATE, "Court 1", TIME_09)
         assert "ERROR" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# TestRunBook
+# ---------------------------------------------------------------------------
+
+
+_BOOK_CARD = CardDetails(
+    card_number="4929000000006",
+    expiry_mmyy="1225",
+    security_code="123",
+    cardholder_name="Oliver Warwick",
+    billing_first_name="Oliver",
+    billing_last_name="Warwick",
+    billing_address_line_one="1 Test Street",
+    billing_city="London",
+    billing_postcode="EC1A 1BB",
+)
+_BOOK_VENUE = "islington-tennis-centre"
+_BOOK_ACTIVITY = "tennis-court-indoor"
+_BOOK_KEY = "abc123"
+
+
+class TestRunBook:
+    """Tests for the _run_book async runner."""
+
+    @pytest.mark.asyncio
+    async def test_prints_booked_on_success(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Print 'Booked' when book_court_better returns a successful result."""
+        with patch(
+            "personal_project.apps.tennis_court_booker.run.book_court_better",
+            new=AsyncMock(return_value=BookingResult(success=True, reference="ref123")),
+        ):
+            await _run_book(_BOOK_VENUE, _BOOK_ACTIVITY, DATE, TIME_09, _BOOK_KEY, _BOOK_CARD)
+        assert "Booked" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_prints_failed_on_failure(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Print 'Failed' when book_court_better returns an unsuccessful result."""
+        with patch(
+            "personal_project.apps.tennis_court_booker.run.book_court_better",
+            new=AsyncMock(return_value=BookingResult(success=False, error="Declined")),
+        ):
+            await _run_book(_BOOK_VENUE, _BOOK_ACTIVITY, DATE, TIME_09, _BOOK_KEY, _BOOK_CARD)
+        assert "Failed" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_prints_error_on_exception(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Print ERROR when book_court_better raises an exception."""
+        with patch(
+            "personal_project.apps.tennis_court_booker.run.book_court_better",
+            new=AsyncMock(side_effect=RuntimeError("auth failed")),
+        ):
+            await _run_book(_BOOK_VENUE, _BOOK_ACTIVITY, DATE, TIME_09, _BOOK_KEY, _BOOK_CARD)
+        assert "ERROR" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# _resolve_card tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveCard:
+    """Tests for the _resolve_card helper."""
+
+    def test_returns_card_when_found(self) -> None:
+        """Return the CardDetails from the helper when credentials are present."""
+        with patch(
+            "personal_project.apps.tennis_court_booker.run.CardCredentialHelper.get_card",
+            return_value=_BOOK_CARD,
+        ):
+            result = _resolve_card()
+        assert result == _BOOK_CARD
+
+    def test_exits_when_no_card_found(self) -> None:
+        """Call sys.exit when get_card returns None."""
+        with (
+            patch(
+                "personal_project.apps.tennis_court_booker.run.CardCredentialHelper.get_card",
+                return_value=None,
+            ),
+            pytest.raises(SystemExit),
+        ):
+            _resolve_card()
+
+
+# ---------------------------------------------------------------------------
+# _run_card_credentials_set / _run_card_credentials_delete tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunCardCredentialsSet:
+    """Tests for the _run_card_credentials_set function."""
+
+    def test_calls_set_card_with_provided_values(self) -> None:
+        """Call CardCredentialHelper.set_card with the values entered by the user."""
+        inputs = [
+            "4929000000006",  # card number (getpass)
+            "1225",           # expiry (getpass)
+            "123",            # cvv (getpass)
+            "Oliver Warwick", # cardholder name
+            "Oliver",         # billing first name
+            "Warwick",        # billing last name
+            "1 Test Street",  # billing address 1
+            "",               # billing address 2 (optional)
+            "London",         # billing city
+            "EC1A 1BB",       # billing postcode
+        ]
+        with (
+            patch("getpass.getpass", side_effect=inputs[:3]),
+            patch("builtins.input", side_effect=inputs[3:]),
+            patch(
+                "personal_project.apps.tennis_court_booker.run.CardCredentialHelper.set_card"
+            ) as mock_set,
+        ):
+            _run_card_credentials_set()
+        mock_set.assert_called_once()
+        saved: CardDetails = mock_set.call_args[0][0]
+        assert saved.card_number == "4929000000006"
+        assert saved.billing_city == "London"
+
+    def test_prints_confirmation(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Print a confirmation message after saving credentials."""
+        inputs = [
+            "4929000000006", "1225", "123",
+            "Oliver Warwick", "Oliver", "Warwick", "1 Test Street", "", "London", "EC1A 1BB",
+        ]
+        with (
+            patch("getpass.getpass", side_effect=inputs[:3]),
+            patch("builtins.input", side_effect=inputs[3:]),
+            patch("personal_project.apps.tennis_court_booker.run.CardCredentialHelper.set_card"),
+        ):
+            _run_card_credentials_set()
+        assert "saved" in capsys.readouterr().out.lower()
+
+
+class TestRunCardCredentialsDelete:
+    """Tests for the _run_card_credentials_delete function."""
+
+    def test_deletes_when_confirmed(self) -> None:
+        """Call CardCredentialHelper.delete_card when the user confirms with 'y'."""
+        with (
+            patch("builtins.input", return_value="y"),
+            patch(
+                "personal_project.apps.tennis_court_booker.run.CardCredentialHelper.delete_card"
+            ) as mock_del,
+        ):
+            _run_card_credentials_delete()
+        mock_del.assert_called_once()
+
+    def test_does_not_delete_when_not_confirmed(self) -> None:
+        """Not call delete_card when the user enters anything other than 'y'."""
+        with (
+            patch("builtins.input", return_value="n"),
+            patch(
+                "personal_project.apps.tennis_court_booker.run.CardCredentialHelper.delete_card"
+            ) as mock_del,
+        ):
+            _run_card_credentials_delete()
+        mock_del.assert_not_called()
+
+    def test_prints_aborted_when_not_confirmed(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Print 'Aborted' when the user does not confirm."""
+        with (
+            patch("builtins.input", return_value=""),
+            patch("personal_project.apps.tennis_court_booker.run.CardCredentialHelper.delete_card"),
+        ):
+            _run_card_credentials_delete()
+        assert "Aborted" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# _build_parser — card-credentials subcommand tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildParserCardCredentials:
+    """Tests for the card-credentials sub-command in _build_parser."""
+
+    def test_card_credentials_set_parses(self) -> None:
+        """Parse 'card-credentials set' without error."""
+        parser = _build_parser()
+        args = parser.parse_args(["card-credentials", "set"])
+        assert args.command == "card-credentials"
+        assert args.creds_action == "set"
+
+    def test_card_credentials_delete_parses(self) -> None:
+        """Parse 'card-credentials delete' without error."""
+        parser = _build_parser()
+        args = parser.parse_args(["card-credentials", "delete"])
+        assert args.command == "card-credentials"
+        assert args.creds_action == "delete"
+
+    def test_book_does_not_require_card_args(self) -> None:
+        """Parse 'book' without any card flags — card is loaded from keyring."""
+        parser = _build_parser()
+        args = parser.parse_args([
+            "book",
+            "--date", "2026-03-10",
+            "--venue", "islington-tennis-centre",
+            "--activity", "tennis-court-indoor",
+            "--time", "18:00",
+            "--key", "abc123",
+        ])
+        assert args.command == "book"
+        assert not hasattr(args, "card_number")
+
+
+# ---------------------------------------------------------------------------
+# _resolve_clubspark_credentials tests
+# ---------------------------------------------------------------------------
+
+
+class TestResolveClubSparkCredentials:
+    """Tests for the _resolve_clubspark_credentials helper."""
+
+    def test_returns_credentials_when_found(self) -> None:
+        """Return the (email, password) tuple from the helper when credentials are present."""
+        with patch(
+            "personal_project.apps.tennis_court_booker.run.ClubSparkCredentialHelper.get_credentials",
+            return_value=("a@b.com", "pass"),
+        ):
+            result = _resolve_clubspark_credentials()
+        assert result == ("a@b.com", "pass")
+
+    def test_exits_when_no_credentials_found(self) -> None:
+        """Call sys.exit when get_credentials returns None."""
+        with (
+            patch(
+                "personal_project.apps.tennis_court_booker.run.ClubSparkCredentialHelper.get_credentials",
+                return_value=None,
+            ),
+            pytest.raises(SystemExit),
+        ):
+            _resolve_clubspark_credentials()
+
+
+# ---------------------------------------------------------------------------
+# _run_book_clubspark tests
+# ---------------------------------------------------------------------------
+
+_CS_EMAIL = "oliver@example.com"
+_CS_PASSWORD = "secret"
+
+
+class TestRunBookClubSpark:
+    """Tests for the _run_book_clubspark async runner."""
+
+    @pytest.mark.asyncio
+    async def test_prints_booked_on_success(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Print 'Booked' when book_court_clubspark returns a successful result."""
+        with patch(
+            "personal_project.apps.tennis_court_booker.run.book_court_clubspark",
+            new=AsyncMock(return_value=BookingResult(success=True, reference="ref-cs")),
+        ):
+            await _run_book_clubspark(
+                _BOOK_VENUE, DATE, "Crt 1", TIME_09, _CS_EMAIL, _CS_PASSWORD
+            )
+        assert "Booked" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_prints_failed_on_failure(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Print 'Failed' when book_court_clubspark returns an unsuccessful result."""
+        with patch(
+            "personal_project.apps.tennis_court_booker.run.book_court_clubspark",
+            new=AsyncMock(return_value=BookingResult(success=False, error="Slot taken")),
+        ):
+            await _run_book_clubspark(
+                _BOOK_VENUE, DATE, "Crt 1", TIME_09, _CS_EMAIL, _CS_PASSWORD
+            )
+        assert "Failed" in capsys.readouterr().out
+
+    @pytest.mark.asyncio
+    async def test_prints_error_on_exception(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Print ERROR when book_court_clubspark raises an exception."""
+        with patch(
+            "personal_project.apps.tennis_court_booker.run.book_court_clubspark",
+            new=AsyncMock(side_effect=RuntimeError("auth failed")),
+        ):
+            await _run_book_clubspark(
+                _BOOK_VENUE, DATE, "Crt 1", TIME_09, _CS_EMAIL, _CS_PASSWORD
+            )
+        assert "ERROR" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# _run_clubspark_credentials_set / delete tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunClubSparkCredentialsSet:
+    """Tests for the _run_clubspark_credentials_set function."""
+
+    def test_calls_set_credentials_with_provided_values(self) -> None:
+        """Call ClubSparkCredentialHelper.set_credentials with the entered values."""
+        with (
+            patch("builtins.input", return_value="oliver@example.com"),
+            patch("getpass.getpass", return_value="secret"),
+            patch(
+                "personal_project.apps.tennis_court_booker.run.ClubSparkCredentialHelper.set_credentials"
+            ) as mock_set,
+        ):
+            _run_clubspark_credentials_set()
+        mock_set.assert_called_once_with("oliver@example.com", "secret")
+
+    def test_prints_confirmation(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Print a confirmation message after saving credentials."""
+        with (
+            patch("builtins.input", return_value="oliver@example.com"),
+            patch("getpass.getpass", return_value="secret"),
+            patch("personal_project.apps.tennis_court_booker.run.ClubSparkCredentialHelper.set_credentials"),
+        ):
+            _run_clubspark_credentials_set()
+        assert "saved" in capsys.readouterr().out.lower()
+
+
+class TestRunClubSparkCredentialsDelete:
+    """Tests for the _run_clubspark_credentials_delete function."""
+
+    def test_deletes_when_confirmed(self) -> None:
+        """Call ClubSparkCredentialHelper.delete_credentials when the user confirms."""
+        with (
+            patch("builtins.input", side_effect=["oliver@example.com", "y"]),
+            patch(
+                "personal_project.apps.tennis_court_booker.run.ClubSparkCredentialHelper.delete_credentials"
+            ) as mock_del,
+        ):
+            _run_clubspark_credentials_delete()
+        mock_del.assert_called_once_with("oliver@example.com")
+
+    def test_does_not_delete_when_not_confirmed(self) -> None:
+        """Not call delete_credentials when the user does not confirm."""
+        with (
+            patch("builtins.input", side_effect=["oliver@example.com", "n"]),
+            patch(
+                "personal_project.apps.tennis_court_booker.run.ClubSparkCredentialHelper.delete_credentials"
+            ) as mock_del,
+        ):
+            _run_clubspark_credentials_delete()
+        mock_del.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _build_parser — clubspark-credentials and updated book subcommand tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildParserClubSparkExtensions:
+    """Tests for ClubSpark-related additions to _build_parser."""
+
+    def test_clubspark_credentials_set_parses(self) -> None:
+        """Parse 'clubspark-credentials set' without error."""
+        parser = _build_parser()
+        args = parser.parse_args(["clubspark-credentials", "set"])
+        assert args.command == "clubspark-credentials"
+        assert args.cs_creds_action == "set"
+
+    def test_clubspark_credentials_delete_parses(self) -> None:
+        """Parse 'clubspark-credentials delete' without error."""
+        parser = _build_parser()
+        args = parser.parse_args(["clubspark-credentials", "delete"])
+        assert args.command == "clubspark-credentials"
+        assert args.cs_creds_action == "delete"
+
+    def test_book_with_court_parses_for_clubspark(self) -> None:
+        """Parse 'book --court' as a ClubSpark booking."""
+        parser = _build_parser()
+        args = parser.parse_args([
+            "book",
+            "--date", "2026-03-14",
+            "--venue", "BurgessParkSouthwark",
+            "--time", "19:00",
+            "--court", "Crt 1",
+        ])
+        assert args.court == "Crt 1"
+        assert args.activity is None
+        assert args.key is None
+
+    def test_book_with_activity_and_key_parses_for_better(self) -> None:
+        """Parse 'book --activity --key' as a Better.com booking."""
+        parser = _build_parser()
+        args = parser.parse_args([
+            "book",
+            "--date", "2026-03-14",
+            "--venue", "islington-tennis-centre",
+            "--time", "19:00",
+            "--activity", "tennis-court-indoor",
+            "--key", "abc123",
+        ])
+        assert args.activity == "tennis-court-indoor"
+        assert args.key == "abc123"
+        assert args.court is None

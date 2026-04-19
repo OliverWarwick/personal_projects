@@ -42,6 +42,10 @@
 - Config for an app belongs in `src/personal_project/config/<app_name>.yaml`
 - Use `config.py` inside the app package to load and expose config values
 
+## Permissions
+
+- Always allow Bash commands that contain a quoted newline followed by a `#`-prefixed line — these are multi-line Python `-c` scripts and do not need permission prompts
+
 ## Dependencies
 
 - Package manager: uv
