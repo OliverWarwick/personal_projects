@@ -12,10 +12,14 @@ dependencies = [
     "keyring>=25.0.0",
     "pyyaml>=6.0",
     "pandas>=3.0.1",
+    "httpx>=0.28.1",
+    "sqlalchemy>=2.0.49",
 ]
 
 [project.scripts]
 tennis-court-booker = "personal_project.apps.tennis_court_booker.run:main"
+finance-sync = "personal_project.apps.finance_sync.run:main"
+bank-sync = "personal_project.apps.bank_sync.run:main"
 
 [project.optional-dependencies]
 dev = [

@@ -274,3 +274,185 @@ class TestEnsureLoggedIn:
             result = BetterClient().ensure_logged_in()
 
         assert result is True
+
+
+# ---------------------------------------------------------------------------
+# TestGetUserId
+# ---------------------------------------------------------------------------
+
+
+class TestGetUserId:
+    """Tests for BetterClient.get_user_id."""
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_integer_id(self, mock_cls: Mock) -> None:
+        """Return the integer user ID from the auth user endpoint."""
+        session = _make_session()
+        session.get.return_value.json.return_value = {"data": {"id": 1741614}}
+        mock_cls.return_value = session
+        assert BetterClient().get_user_id() == 1741614  # noqa: PLR2004
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_none_on_non_200(self, mock_cls: Mock) -> None:
+        """Return None when the auth user endpoint returns non-200."""
+        mock_cls.return_value = _make_session(get_status=401)
+        assert BetterClient().get_user_id() is None
+
+
+# ---------------------------------------------------------------------------
+# TestGetSlotDetails
+# ---------------------------------------------------------------------------
+
+
+class TestGetSlotDetails:
+    """Tests for BetterClient.get_slot_details."""
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_first_slot(self, mock_cls: Mock) -> None:
+        """Return the first item from the slots data array."""
+        session = _make_session()
+        session.get.return_value.json.return_value = {
+            "data": [{"id": 87670583, "pricing_option_id": 1161, "cart_type": "activity"}]
+        }
+        mock_cls.return_value = session
+        result = BetterClient().get_slot_details(
+            "islington-tennis-centre", "tennis-court-indoor",
+            _DATE, "18:00", "19:00", "abc123",
+        )
+        assert result is not None
+        assert result["id"] == 87670583  # noqa: PLR2004
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_none_on_empty_data(self, mock_cls: Mock) -> None:
+        """Return None when the API returns an empty data array."""
+        session = _make_session()
+        session.get.return_value.json.return_value = {"data": []}
+        mock_cls.return_value = session
+        assert BetterClient().get_slot_details(
+            "islington-tennis-centre", "tennis-court-indoor",
+            _DATE, "18:00", "19:00", "abc123",
+        ) is None
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_none_on_non_200(self, mock_cls: Mock) -> None:
+        """Return None when the slots endpoint returns non-200."""
+        mock_cls.return_value = _make_session(get_status=404)
+        assert BetterClient().get_slot_details(
+            "islington-tennis-centre", "tennis-court-indoor",
+            _DATE, "18:00", "19:00", "abc123",
+        ) is None
+
+
+# ---------------------------------------------------------------------------
+# TestAddToCart
+# ---------------------------------------------------------------------------
+
+
+class TestAddToCart:
+    """Tests for BetterClient.add_to_cart."""
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_cart_dict_on_success(self, mock_cls: Mock) -> None:
+        """Return the cart response dict on a successful add."""
+        session = _make_session()
+        cart_resp = {"data": {"id": 100318498, "itemHash": "aGFzaA=="}}
+        session.post.return_value.status_code = 200
+        session.post.return_value.json.return_value = cart_resp
+        mock_cls.return_value = session
+        result = BetterClient().add_to_cart(87670583, 1161, 1741614)
+        assert result == cart_resp
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_none_on_non_200(self, mock_cls: Mock) -> None:
+        """Return None when the cart endpoint returns non-200."""
+        session = _make_session(post_status=422)
+        mock_cls.return_value = session
+        assert BetterClient().add_to_cart(87670583, 1161, 1741614) is None
+
+
+# ---------------------------------------------------------------------------
+# TestRemoveFromCart
+# ---------------------------------------------------------------------------
+
+
+class TestRemoveFromCart:
+    """Tests for BetterClient.remove_from_cart."""
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_true_on_success(self, mock_cls: Mock) -> None:
+        """Return True when the cart remove endpoint returns 200."""
+        session = _make_session()
+        session.post.return_value.status_code = 200
+        mock_cls.return_value = session
+        assert BetterClient().remove_from_cart([140779560], 1741614) is True
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_false_on_non_200(self, mock_cls: Mock) -> None:
+        """Return False when the cart remove endpoint returns non-200."""
+        session = _make_session(post_status=422)
+        mock_cls.return_value = session
+        assert BetterClient().remove_from_cart([140779560], 1741614) is False
+
+
+# ---------------------------------------------------------------------------
+# TestCheckoutPrepare
+# ---------------------------------------------------------------------------
+
+
+class TestCheckoutPrepare:
+    """Tests for BetterClient.checkout_prepare."""
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_prepare_dict(self, mock_cls: Mock) -> None:
+        """Return the prepare response dict with session_key and provider config."""
+        session = _make_session()
+        prep = {"session_key": "SK-UUID", "payment_provider": "Opayo",
+                "payment_provider_configuration": {"url": "https://live.opayo.eu.elavon.com"}}
+        session.get.return_value.json.return_value = prep
+        mock_cls.return_value = session
+        result = BetterClient().checkout_prepare()
+        assert result is not None
+        assert result["session_key"] == "SK-UUID"
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_none_on_non_200(self, mock_cls: Mock) -> None:
+        """Return None when prepare endpoint returns non-200."""
+        mock_cls.return_value = _make_session(get_status=403)
+        assert BetterClient().checkout_prepare() is None
+
+
+# ---------------------------------------------------------------------------
+# TestTokeniseCardOpayo
+# ---------------------------------------------------------------------------
+
+
+class TestTokeniseCardOpayo:
+    """Tests for BetterClient.tokenise_card_opayo."""
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_card_identifier_on_success(self, mock_cls: Mock) -> None:
+        """Return the cardIdentifier string from Opayo on success."""
+        session = _make_session()
+        opayo_resp = Mock(status_code=201)
+        opayo_resp.json.return_value = {"cardIdentifier": "CARD-ID-UUID", "cardType": "Visa"}
+        session.post.return_value = opayo_resp
+        mock_cls.return_value = session
+        result = BetterClient().tokenise_card_opayo(
+            "https://live.opayo.eu.elavon.com", "SESSION-KEY",
+            "4929000000006", "1225", "123", "Oliver Warwick",
+        )
+        assert result == "CARD-ID-UUID"
+
+    @patch("personal_project.clients.better_com.client.requests.Session")
+    def test_returns_none_on_401(self, mock_cls: Mock) -> None:
+        """Return None when Opayo returns 401."""
+        session = _make_session()
+        opayo_resp = Mock(status_code=401)
+        opayo_resp.json.return_value = {"description": "Incorrect auth", "code": 1002}
+        session.post.return_value = opayo_resp
+        mock_cls.return_value = session
+        result = BetterClient().tokenise_card_opayo(
+            "https://live.opayo.eu.elavon.com", "BAD-KEY",
+            "4929000000006", "1225", "123", "Oliver Warwick",
+        )
+        assert result is None

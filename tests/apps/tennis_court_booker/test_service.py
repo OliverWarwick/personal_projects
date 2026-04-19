@@ -1,20 +1,32 @@
 """Tests for the tennis court booker service layer.
 
+.. note::
+    The ``book_court_clubspark`` tests are grouped in
+    :class:`TestBookCourtClubSpark` at the bottom of this module.
+
 Verifies that :func:`get_venue_availability`, :func:`get_venue_availability_better`,
-and :func:`check_slot_availability` correctly orchestrate their respective clients
-and translate raw slot data into domain objects.  All network clients are replaced
-with mocks so these tests run without a browser or network connection.
+:func:`check_slot_availability`, and :func:`book_court_better` correctly orchestrate
+their respective clients and translate raw slot data into domain objects.  All
+network clients are replaced with mocks so these tests run without a browser or
+network connection.
 """
 
 from __future__ import annotations
 
 import datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from personal_project.apps.tennis_court_booker.models import CourtSlot, VenueAvailability
+from personal_project.apps.tennis_court_booker.models import (
+    BookingResult,
+    CardDetails,
+    CourtSlot,
+    VenueAvailability,
+)
 from personal_project.apps.tennis_court_booker.service import (
+    book_court_better,
+    book_court_clubspark,
     check_slot_availability,
     get_venue_availability,
     get_venue_availability_better,
@@ -313,3 +325,307 @@ class TestGetVenueAvailabilityBetter:
             BETTER_VENUE, BETTER_ACTIVITY, DATE, client=mock_better_client
         )
         assert result.slots == []
+
+
+# ---------------------------------------------------------------------------
+# book_court_better tests
+# ---------------------------------------------------------------------------
+
+_CARD = CardDetails(
+    card_number="4929000000006",
+    expiry_mmyy="1225",
+    security_code="123",
+    cardholder_name="Oliver Warwick",
+    billing_first_name="Oliver",
+    billing_last_name="Warwick",
+    billing_address_line_one="1 Test Street",
+    billing_city="London",
+    billing_postcode="EC1A 1BB",
+)
+_START = datetime.time(18, 0)
+_COMPOSITE_KEY = "abc123"
+_SLOT_ID = 99999
+_PRICING_OPTION_ID = 1161
+_USER_ID = 1741614
+_CART_ITEM_ID = 55555
+_ITEM_HASH = "aGFzaA=="
+_SESSION_KEY = "SESSION-KEY-UUID"
+_OPAYO_URL = "https://live.opayo.eu.elavon.com"
+_CARD_IDENTIFIER = "CARD-ID-UUID"
+_TX_UUID = "tx-uuid-abc"
+
+
+_MISSING = object()  # sentinel for "use default" vs explicit None
+
+
+def _make_booking_client(
+    *,
+    logged_in: bool = True,
+    user_id: int | None = _USER_ID,
+    slot: object = _MISSING,
+    cart: object = _MISSING,
+    prep: object = _MISSING,
+    card_identifier: str | None = _CARD_IDENTIFIER,
+    auth_resp: object = _MISSING,
+) -> MagicMock:
+    """Return a configured MagicMock BetterClient for booking flow tests.
+
+    Pass ``None`` explicitly to simulate a method that returns ``None`` (i.e.
+    a failure path).  Omit a parameter to use the default happy-path value.
+
+    Args:
+        logged_in: Whether ``ensure_logged_in`` returns ``True``.
+        user_id: Value returned by ``get_user_id``.
+        slot: Value returned by ``get_slot_details``.  Defaults to a valid
+            slot dict; pass ``None`` to simulate a missing slot.
+        cart: Value returned by ``add_to_cart``.  Pass ``None`` to simulate
+            a cart failure.
+        prep: Value returned by ``checkout_prepare``.  Pass ``None`` to
+            simulate a prepare failure.
+        card_identifier: Value returned by ``tokenise_card_opayo``.
+        auth_resp: Value returned by ``checkout_authorise``.  Defaults to a
+            successful authorisation response.
+
+    Returns:
+        A :class:`~unittest.mock.MagicMock` configured for the requested
+        scenario.
+
+    """
+    client = MagicMock()
+    client.ensure_logged_in.return_value = logged_in
+    client.get_user_id.return_value = user_id
+    client.get_slot_details.return_value = (
+        {"id": _SLOT_ID, "pricing_option_id": _PRICING_OPTION_ID}
+        if slot is _MISSING else slot
+    )
+    client.add_to_cart.return_value = (
+        {"data": {"itemHash": _ITEM_HASH, "items": [{"id": _CART_ITEM_ID}]}}
+        if cart is _MISSING else cart
+    )
+    client.checkout_prepare.return_value = (
+        {"session_key": _SESSION_KEY, "payment_provider_configuration": {"url": _OPAYO_URL}}
+        if prep is _MISSING else prep
+    )
+    client.tokenise_card_opayo.return_value = card_identifier
+    client.checkout_authorise.return_value = (
+        {"transaction_uuid": _TX_UUID, "transaction_status": "ok", "sca_url": None, "error": None}
+        if auth_resp is _MISSING else auth_resp
+    )
+    client.remove_from_cart.return_value = True
+    return client
+
+
+class TestBookCourtBetter:
+    """Tests for the book_court_better service function."""
+
+    @pytest.mark.asyncio
+    async def test_returns_booking_result_on_success(self) -> None:
+        """Return a successful BookingResult with a transaction reference."""
+        with patch("personal_project.apps.tennis_court_booker.service.asyncio.to_thread",
+                   side_effect=lambda f, *a, **kw: f(*a, **kw)):
+            result = await book_court_better(
+                BETTER_VENUE, BETTER_ACTIVITY, DATE, _START, _COMPOSITE_KEY, _CARD,
+                client=_make_booking_client(),
+            )
+        assert isinstance(result, BookingResult)
+        assert result.success is True
+        assert result.reference == _TX_UUID
+
+    @pytest.mark.asyncio
+    async def test_raises_runtime_error_when_login_fails(self) -> None:
+        """Raise RuntimeError when ensure_logged_in returns False."""
+        with (
+            patch("personal_project.apps.tennis_court_booker.service.asyncio.to_thread",
+                  side_effect=lambda f, *a, **kw: f(*a, **kw)),
+            pytest.raises(RuntimeError, match="authentication failed"),
+        ):
+            await book_court_better(
+                BETTER_VENUE, BETTER_ACTIVITY, DATE, _START, _COMPOSITE_KEY, _CARD,
+                client=_make_booking_client(logged_in=False),
+            )
+
+    @pytest.mark.asyncio
+    async def test_returns_failure_when_user_id_missing(self) -> None:
+        """Return failure BookingResult when user ID cannot be retrieved."""
+        with patch("personal_project.apps.tennis_court_booker.service.asyncio.to_thread",
+                   side_effect=lambda f, *a, **kw: f(*a, **kw)):
+            result = await book_court_better(
+                BETTER_VENUE, BETTER_ACTIVITY, DATE, _START, _COMPOSITE_KEY, _CARD,
+                client=_make_booking_client(user_id=None),
+            )
+        assert result.success is False
+        assert result.error is not None
+
+    @pytest.mark.asyncio
+    async def test_returns_failure_when_slot_not_found(self) -> None:
+        """Return failure BookingResult when get_slot_details returns None."""
+        with patch("personal_project.apps.tennis_court_booker.service.asyncio.to_thread",
+                   side_effect=lambda f, *a, **kw: f(*a, **kw)):
+            result = await book_court_better(
+                BETTER_VENUE, BETTER_ACTIVITY, DATE, _START, _COMPOSITE_KEY, _CARD,
+                client=_make_booking_client(slot=None),
+            )
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_returns_failure_when_cart_add_fails(self) -> None:
+        """Return failure BookingResult when add_to_cart returns None."""
+        with patch("personal_project.apps.tennis_court_booker.service.asyncio.to_thread",
+                   side_effect=lambda f, *a, **kw: f(*a, **kw)):
+            result = await book_court_better(
+                BETTER_VENUE, BETTER_ACTIVITY, DATE, _START, _COMPOSITE_KEY, _CARD,
+                client=_make_booking_client(cart=None),
+            )
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_returns_failure_when_prepare_fails(self) -> None:
+        """Return failure BookingResult when checkout_prepare returns None."""
+        with patch("personal_project.apps.tennis_court_booker.service.asyncio.to_thread",
+                   side_effect=lambda f, *a, **kw: f(*a, **kw)):
+            result = await book_court_better(
+                BETTER_VENUE, BETTER_ACTIVITY, DATE, _START, _COMPOSITE_KEY, _CARD,
+                client=_make_booking_client(prep=None),
+            )
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_returns_failure_when_tokenisation_fails(self) -> None:
+        """Return failure BookingResult when Opayo card tokenisation returns None."""
+        with patch("personal_project.apps.tennis_court_booker.service.asyncio.to_thread",
+                   side_effect=lambda f, *a, **kw: f(*a, **kw)):
+            result = await book_court_better(
+                BETTER_VENUE, BETTER_ACTIVITY, DATE, _START, _COMPOSITE_KEY, _CARD,
+                client=_make_booking_client(card_identifier=None),
+            )
+        assert result.success is False
+
+    @pytest.mark.asyncio
+    async def test_returns_failure_when_bank_declines(self) -> None:
+        """Return failure BookingResult when authorise reports a bank decline."""
+        declined = {
+            "transaction_uuid": "tx-declined",
+            "transaction_status": "failed",
+            "sca_url": None,
+            "error": {"message": "The Authorisation was Declined by the bank.", "code": "2000"},
+        }
+        with patch("personal_project.apps.tennis_court_booker.service.asyncio.to_thread",
+                   side_effect=lambda f, *a, **kw: f(*a, **kw)):
+            result = await book_court_better(
+                BETTER_VENUE, BETTER_ACTIVITY, DATE, _START, _COMPOSITE_KEY, _CARD,
+                client=_make_booking_client(auth_resp=declined),
+            )
+        assert result.success is False
+        assert "Declined" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_returns_failure_when_sca_required(self) -> None:
+        """Return failure BookingResult when a 3DS SCA challenge is required."""
+        sca = {
+            "transaction_uuid": "tx-sca",
+            "transaction_status": "pending",
+            "sca_url": "https://3ds.example.com/challenge",
+            "error": None,
+        }
+        with patch("personal_project.apps.tennis_court_booker.service.asyncio.to_thread",
+                   side_effect=lambda f, *a, **kw: f(*a, **kw)):
+            result = await book_court_better(
+                BETTER_VENUE, BETTER_ACTIVITY, DATE, _START, _COMPOSITE_KEY, _CARD,
+                client=_make_booking_client(auth_resp=sca),
+            )
+        assert result.success is False
+        assert "3D Secure" in (result.error or "")
+
+# ---------------------------------------------------------------------------
+# book_court_clubspark tests
+# ---------------------------------------------------------------------------
+
+_CS_EMAIL = "oliver@example.com"
+_CS_PASSWORD = "secret"
+
+
+def _make_cs_client(
+    *,
+    reference: str | None = "ref-cs-123",
+    raises: Exception | None = None,
+) -> MagicMock:
+    """Return a configured AsyncMock ClubSparkClient for booking tests.
+
+    Args:
+        reference: Value returned by ``book_slot``.  Pass ``None`` to simulate
+            a booking that succeeds but returns no reference.
+        raises: If provided, ``book_slot`` will raise this exception instead.
+
+    Returns:
+        A :class:`~unittest.mock.MagicMock` with an async ``book_slot`` method.
+
+    """
+    client = MagicMock()
+    if raises is not None:
+        client.book_slot = AsyncMock(side_effect=raises)
+    else:
+        client.book_slot = AsyncMock(return_value=reference)
+    return client
+
+
+class TestBookCourtClubSpark:
+    """Tests for the book_court_clubspark service function."""
+
+    @pytest.mark.asyncio
+    async def test_returns_success_with_reference(self) -> None:
+        """Return a successful BookingResult containing the reference string."""
+        result = await book_court_clubspark(
+            VENUE, DATE, "Crt 1", TIME_09,
+            email=_CS_EMAIL, password=_CS_PASSWORD,
+            client=_make_cs_client(reference="ref-cs-123"),
+        )
+        assert isinstance(result, BookingResult)
+        assert result.success is True
+        assert result.reference == "ref-cs-123"
+
+    @pytest.mark.asyncio
+    async def test_returns_success_with_none_reference(self) -> None:
+        """Return success even when book_slot returns None (no reference element found)."""
+        result = await book_court_clubspark(
+            VENUE, DATE, "Crt 1", TIME_09,
+            email=_CS_EMAIL, password=_CS_PASSWORD,
+            client=_make_cs_client(reference=None),
+        )
+        assert result.success is True
+        assert result.reference is None
+
+    @pytest.mark.asyncio
+    async def test_returns_failure_on_runtime_error(self) -> None:
+        """Return failure BookingResult when book_slot raises RuntimeError."""
+        result = await book_court_clubspark(
+            VENUE, DATE, "Crt 1", TIME_09,
+            email=_CS_EMAIL, password=_CS_PASSWORD,
+            client=_make_cs_client(raises=RuntimeError("Slot not found")),
+        )
+        assert result.success is False
+        assert "Slot not found" in (result.error or "")
+
+    @pytest.mark.asyncio
+    async def test_returns_failure_on_timeout_error(self) -> None:
+        """Return failure BookingResult when book_slot raises TimeoutError."""
+        result = await book_court_clubspark(
+            VENUE, DATE, "Crt 1", TIME_09,
+            email=_CS_EMAIL, password=_CS_PASSWORD,
+            client=_make_cs_client(raises=TimeoutError("Grid did not appear")),
+        )
+        assert result.success is False
+        assert result.error is not None
+
+    @pytest.mark.asyncio
+    async def test_book_slot_called_with_correct_args(self) -> None:
+        """Call client.book_slot with the expected venue, date, court, time, and credentials."""
+        cs_client = _make_cs_client()
+        await book_court_clubspark(
+            VENUE, DATE, "Crt 1", TIME_09,
+            email=_CS_EMAIL, password=_CS_PASSWORD,
+            client=cs_client,
+        )
+        cs_client.book_slot.assert_called_once_with(
+            VENUE, DATE, "Crt 1", TIME_09,
+            email=_CS_EMAIL, password=_CS_PASSWORD,
+        )
