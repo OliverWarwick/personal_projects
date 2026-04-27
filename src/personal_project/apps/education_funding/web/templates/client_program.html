@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}{{ program.display_name }} — Education Financing{% endblock %}
+{% block content %}
+<section class="max-w-3xl mx-auto px-6 pt-12 pb-24">
+    <a href="/client" class="text-sm hover:underline mb-8 inline-block"
+       style="color: var(--text-muted);">&larr; Back to dashboard</a>
+
+    <p class="uppercase tracking-[0.2em] text-xs mb-3" style="color: var(--text-muted);">Programme</p>
+    <h1 class="font-serif text-5xl mb-4 leading-[1.05]">{{ program.display_name }}</h1>
+    <p class="text-lg mb-12" style="color: var(--text-muted);">{{ program.tagline }}</p>
+
+    <section class="space-y-12">
+        <div>
+            <h2 class="font-serif text-2xl mb-3">How it works</h2>
+            <p style="color: var(--text-muted); line-height: 1.7;">
+                We put up the training capital you need to enrol on a sponsored cadet programme &mdash;
+                ground school, flight hours, type rating, and the living costs that go with them.
+                In return, you commit a fixed percentage of your post-qualification salary for an
+                agreed period. The repayment share and term are capped before you sign, and the
+                clock only starts once you're flying the line.
+            </p>
+        </div>
+
+        <div>
+            <h2 class="font-serif text-2xl mb-3">Who it's for</h2>
+            <ul class="space-y-2 list-disc pl-5" style="color: var(--text-muted); line-height: 1.7;">
+                <li>Applicants with a confirmed conditional offer on a UK sponsored cadet programme.</li>
+                <li>Holders of a valid Class 1 medical (or eligible to obtain one before training start).</li>
+                <li>UK residents committed to a full-time training pathway.</li>
+            </ul>
+        </div>
+
+        <div>
+            <h2 class="font-serif text-2xl mb-3">The application process</h2>
+            <ol class="space-y-5">
+                {% for step in steps %}
+                <li class="flex gap-4">
+                    <div class="w-8 h-8 rounded-full flex items-center justify-center font-serif text-sm shrink-0 mt-0.5"
+                         style="background: var(--accent-soft); color: var(--accent-hover);">
+                        {{ loop.index }}
+                    </div>
+                    <div>
+                        <p class="font-medium">{{ step.title }}</p>
+                        <p class="text-sm mt-1" style="color: var(--text-muted); line-height: 1.6;">{{ step.body }}</p>
+                    </div>
+                </li>
+                {% endfor %}
+            </ol>
+        </div>
+
+        <div>
+            <h2 class="font-serif text-2xl mb-3">Timeline</h2>
+            <p style="color: var(--text-muted); line-height: 1.7;">
+                Most applications move from saved to live within four to eight weeks once your
+                supporting documents are in. We'll keep you updated through each stage and assign
+                a single point of contact who reviews your file end-to-end.
+            </p>
+        </div>
+
+        <div>
+            <h2 class="font-serif text-2xl mb-3">Repayment structure</h2>
+            <p style="color: var(--text-muted); line-height: 1.7;" class="mb-4">
+                Each placement is structured as an Income Share Agreement (ISA). Once the funded
+                pilot enters paid employment, the programme receives
+                <strong style="color: var(--text);">7% of gross annual base salary</strong>
+                for a period of <strong style="color: var(--text);">ten years</strong> from the date
+                of first disbursement. The obligation is discharged in full &mdash; regardless of
+                the time elapsed &mdash; if and when cumulative repayments reach
+                <strong style="color: var(--text);">three times the principal advanced</strong>.
+            </p>
+            <p style="color: var(--text-muted); line-height: 1.7;" class="mb-4">
+                Repayment obligations are governed by a legally binding Income Share Agreement
+                executed prior to disbursement. The agreement includes standard provisions covering
+                assignment of future earnings, event-of-default triggers, and step-in rights.
+            </p>
+            <div class="rounded-xl p-5 mt-4"
+                 style="background: var(--surface); border: 1px solid var(--border);">
+                <div class="grid md:grid-cols-3 gap-5">
+                    {% for term in repayment_terms %}
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">{{ term.label }}</p>
+                        <p class="font-serif text-xl">{{ term.value }}</p>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div>
+            <h2 class="font-serif text-2xl mb-3">Compared to other options</h2>
+            <p class="mb-6" style="color: var(--text-muted); line-height: 1.7;">
+                A side-by-side comparison of common UK pathways for funding commercial pilot training.
+                Figures are illustrative and intended as a starting point for your own diligence.
+            </p>
+            <div class="space-y-4">
+                {% for product in product_comparison %}
+                <div class="rounded-2xl p-5 md:p-6"
+                     style="background: {% if product.is_current %}var(--surface){% else %}var(--surface){% endif %};
+                            border: {% if product.is_current %}2px solid var(--accent){% else %}1px solid var(--border){% endif %};">
+                    <div class="flex items-start justify-between gap-3 mb-1">
+                        <h3 class="font-serif text-xl">{{ product.name }}</h3>
+                        {% if product.is_current %}
+                        <span class="text-xs uppercase tracking-[0.15em] px-2 py-0.5 rounded-full whitespace-nowrap"
+                              style="background: var(--accent-soft); color: var(--accent-hover);">
+                            This product
+                        </span>
+                        {% endif %}
+                    </div>
+                    <p class="text-sm mb-4" style="color: var(--text-muted);">{{ product.summary }}</p>
+                    <dl class="grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                        {% for label, value in product.rows %}
+                        <div class="flex flex-col py-1.5 border-t" style="border-color: var(--border);">
+                            <dt class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">{{ label }}</dt>
+                            <dd>{{ value }}</dd>
+                        </div>
+                        {% endfor %}
+                    </dl>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+
+    <div class="mt-16 pt-10 border-t flex flex-col md:flex-row md:items-center md:justify-between gap-5"
+         style="border-color: var(--border);">
+        <div>
+            <p class="font-serif text-xl mb-1">Ready to apply?</p>
+            <p class="text-sm" style="color: var(--text-muted);">Open an application and start your draft &mdash; takes a few minutes.</p>
+        </div>
+        <a href="/client/{{ program.slug }}/application"
+           class="btn-primary px-6 py-3 rounded-lg font-medium text-sm whitespace-nowrap">
+            Open Application &rarr;
+        </a>
+    </div>
+</section>
+{% endblock %}

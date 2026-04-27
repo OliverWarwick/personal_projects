@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Welcome — Education Financing{% endblock %}
+{% block content %}
+<section class="max-w-3xl mx-auto px-6 min-h-screen flex items-center">
+    <div class="grid md:grid-cols-2 gap-5 w-full py-12">
+        <a href="/login/investor" class="role-card rounded-2xl p-7 flex flex-col h-full">
+            <div class="flex items-start justify-between mb-10">
+                <span class="text-xs uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                      style="background: var(--surface-warm); color: var(--text-muted);">For investors</span>
+                <span class="arrow text-xl">&rarr;</span>
+            </div>
+            <h2 class="font-serif text-2xl mb-2">Investor</h2>
+            <p class="text-sm leading-relaxed" style="color: var(--text-muted);">
+                Track funded placements, returns, and portfolio activity across the cadets you back.
+            </p>
+        </a>
+
+        <a href="/login/client" class="role-card rounded-2xl p-7 flex flex-col h-full">
+            <div class="flex items-start justify-between mb-10">
+                <span class="text-xs uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                      style="background: var(--surface-warm); color: var(--text-muted);">For clients</span>
+                <span class="arrow text-xl">&rarr;</span>
+            </div>
+            <h2 class="font-serif text-2xl mb-2">Client</h2>
+            <p class="text-sm leading-relaxed" style="color: var(--text-muted);">
+                Explore training routes, costs, and funding options tailored to your career path.
+            </p>
+        </a>
+    </div>
+</section>
+{% endblock %}

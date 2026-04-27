@@ -1,0 +1,448 @@
+{% extends "base.html" %}
+{% block title %}Application {{ application.reference }} &mdash; {{ program.display_name }}{% endblock %}
+{% block content %}
+{% set is_locked = not application.is_editable %}
+<style>
+    .form-input, .form-textarea, .form-select {
+        width: 100%;
+        background: var(--surface);
+        border: 1px solid var(--border-strong);
+        border-radius: 0.5rem;
+        padding: 0.625rem 0.75rem;
+        font-size: 0.9rem;
+        color: var(--text);
+        transition: border-color 120ms ease, box-shadow 120ms ease;
+    }
+    .form-input:focus, .form-textarea:focus, .form-select:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(201, 99, 66, 0.15);
+    }
+    .form-textarea { resize: vertical; min-height: 9rem; line-height: 1.55; }
+    .form-label {
+        display: block;
+        font-size: 0.8rem;
+        font-weight: 500;
+        margin-bottom: 0.4rem;
+        color: var(--text);
+    }
+    .form-hint {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        margin-top: 0.4rem;
+    }
+    .read-block {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 0.625rem;
+        padding: 0.75rem 1rem;
+        font-size: 0.9rem;
+        line-height: 1.55;
+        color: var(--text);
+        white-space: pre-wrap;
+    }
+    .read-block.empty { color: var(--text-muted); font-style: italic; white-space: normal; }
+    .section-anchor { scroll-margin-top: 1.5rem; }
+    .saved-flash {
+        font-size: 0.75rem;
+        color: #4F7A4D;
+        background: #E6EFE3;
+        border: 1px solid #C9D9C4;
+        border-radius: 999px;
+        padding: 0.15rem 0.6rem;
+    }
+    .saved-flash.error { color: #8B3D2A; background: #F4E0DA; border-color: #E0B7A8; }
+    .nav-pill {
+        display: flex; align-items: center; gap: 0.625rem;
+        padding: 0.5rem 0.65rem;
+        border-radius: 0.5rem;
+        font-size: 0.875rem;
+        color: var(--text-muted);
+        transition: background 120ms ease, color 120ms ease;
+    }
+    .nav-pill:hover { background: var(--surface-warm); color: var(--text); }
+    .nav-pill .dot {
+        width: 0.55rem; height: 0.55rem; border-radius: 999px;
+        background: var(--surface-warm);
+        border: 1px solid var(--border-strong);
+        flex-shrink: 0;
+    }
+    .nav-pill.complete .dot { background: var(--accent); border-color: var(--accent); }
+</style>
+
+<section class="max-w-6xl mx-auto px-6 pt-10 pb-24">
+    <a href="/client" class="text-sm hover:underline mb-6 inline-block"
+       style="color: var(--text-muted);">&larr; Back to dashboard</a>
+
+    <div class="flex items-start justify-between gap-4 mb-1 flex-wrap">
+        <div>
+            <p class="uppercase tracking-[0.2em] text-xs mb-2" style="color: var(--text-muted);">{{ program.display_name }} &middot; Application</p>
+            <h1 class="font-serif text-4xl leading-[1.05]">
+                {% if is_locked %}Your submitted application{% else %}Your application{% endif %}
+            </h1>
+        </div>
+        <span class="text-xs uppercase tracking-[0.18em] px-2.5 py-1 rounded-full whitespace-nowrap"
+              style="background: var(--accent-soft); color: var(--accent-hover);">
+            {{ status_labels[application.status] }}
+        </span>
+    </div>
+    <p class="mt-2 mb-10" style="color: var(--text-muted);">
+        Reference <span style="color: var(--text);">{{ application.reference }}</span>
+        {% if application.last_updated %}
+        &middot; last updated {{ application.last_updated.split('T')[0] }}
+        {% endif %}
+        {% if is_locked %}
+        &middot; submitted {{ (application.submitted_at or '').split('T')[0] }}
+        {% else %}
+        &middot; saved automatically as you go
+        {% endif %}
+    </p>
+
+    <div class="grid lg:grid-cols-[240px_minmax(0,1fr)] gap-10">
+        <aside>
+            <nav class="space-y-1 lg:sticky lg:top-6 mb-6">
+                {% for section in sections %}
+                <a href="#section-{{ section.key }}"
+                   class="nav-pill{% if application.sections_completed.get(section.key) %} complete{% endif %}">
+                    <span class="dot"></span>
+                    <span>{{ section.label }}</span>
+                </a>
+                {% endfor %}
+
+                {% if not is_locked %}
+                <form method="post" action="/client/{{ program.slug }}/application/submit"
+                      class="mt-6 pt-5 border-t" style="border-color: var(--border);">
+                    <p class="text-xs mb-3" style="color: var(--text-muted);">
+                        {% if application.all_sections_complete %}
+                        All required sections saved. Ready when you are.
+                        {% else %}
+                        Save each required section before submitting.
+                        {% endif %}
+                    </p>
+                    <button type="submit"
+                            class="btn-primary w-full py-2 rounded-lg text-sm font-medium"
+                            {% if not application.all_sections_complete %}disabled style="opacity: 0.55; cursor: not-allowed;"{% endif %}>
+                        Submit application
+                    </button>
+                </form>
+                {% endif %}
+            </nav>
+        </aside>
+
+        <div class="space-y-6 min-w-0">
+            {# ---- About yourself ---- #}
+            <section id="section-about" class="role-card rounded-2xl p-6 md:p-7 section-anchor">
+                <div class="flex items-baseline justify-between gap-3 mb-1">
+                    <h2 class="font-serif text-2xl">About yourself</h2>
+                    {% if saved_section == 'about' %}<span class="saved-flash">Saved</span>{% endif %}
+                </div>
+                <p class="text-sm mb-5" style="color: var(--text-muted);">Who you are and where you're based.</p>
+
+                {% if is_locked %}
+                <dl class="grid md:grid-cols-2 gap-4 text-sm">
+                    <div><dt class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Full name</dt>
+                        <dd class="read-block {% if not application.full_name %}empty{% endif %}">{{ application.full_name or 'Not provided' }}</dd></div>
+                    <div><dt class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Date of birth</dt>
+                        <dd class="read-block {% if not application.date_of_birth %}empty{% endif %}">{{ application.date_of_birth or 'Not provided' }}</dd></div>
+                    <div><dt class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Location</dt>
+                        <dd class="read-block {% if not application.location %}empty{% endif %}">{{ application.location or 'Not provided' }}</dd></div>
+                    <div><dt class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Nationality</dt>
+                        <dd class="read-block {% if not application.nationality %}empty{% endif %}">{{ application.nationality or 'Not provided' }}</dd></div>
+                    <div class="md:col-span-2"><dt class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Target programme</dt>
+                        <dd class="read-block {% if not application.programme %}empty{% endif %}">{{ application.programme or 'Not provided' }}</dd></div>
+                    <div class="md:col-span-2"><dt class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Personal statement</dt>
+                        <dd class="read-block {% if not application.personal_statement %}empty{% endif %}">{{ application.personal_statement or 'Not provided' }}</dd></div>
+                </dl>
+                {% else %}
+                <form method="post" action="/client/{{ program.slug }}/application/save" class="space-y-4">
+                    <input type="hidden" name="section" value="about">
+                    <div class="grid md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label" for="full_name">Full name</label>
+                            <input class="form-input" id="full_name" name="full_name" type="text"
+                                   value="{{ application.full_name }}" autocomplete="name">
+                        </div>
+                        <div>
+                            <label class="form-label" for="date_of_birth">Date of birth</label>
+                            <input class="form-input" id="date_of_birth" name="date_of_birth" type="date"
+                                   value="{{ application.date_of_birth }}">
+                        </div>
+                        <div>
+                            <label class="form-label" for="location">Location</label>
+                            <input class="form-input" id="location" name="location" type="text"
+                                   value="{{ application.location }}" placeholder="City, country">
+                        </div>
+                        <div>
+                            <label class="form-label" for="nationality">Nationality</label>
+                            <input class="form-input" id="nationality" name="nationality" type="text"
+                                   value="{{ application.nationality }}">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="form-label" for="programme">Target sponsored programme</label>
+                        <input class="form-input" id="programme" name="programme" type="text"
+                               value="{{ application.programme }}"
+                               placeholder="e.g. easyJet MPL (CAE Oxford)">
+                        <p class="form-hint">Which airline-sponsored cadet programme you're applying to.</p>
+                    </div>
+                    <div>
+                        <label class="form-label" for="personal_statement">Personal statement</label>
+                        <textarea class="form-textarea" id="personal_statement" name="personal_statement"
+                                  placeholder="A few short paragraphs about who you are and what brings you here.">{{ application.personal_statement }}</textarea>
+                    </div>
+                    <button type="submit" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium">
+                        Save section
+                    </button>
+                </form>
+                {% endif %}
+            </section>
+
+            {# ---- Motivation ---- #}
+            <section id="section-motivation" class="role-card rounded-2xl p-6 md:p-7 section-anchor">
+                <div class="flex items-baseline justify-between gap-3 mb-1">
+                    <h2 class="font-serif text-2xl">Motivation</h2>
+                    {% if saved_section == 'motivation' %}<span class="saved-flash">Saved</span>{% endif %}
+                </div>
+                <p class="text-sm mb-5" style="color: var(--text-muted);">Why a commercial pilot career, and why now.</p>
+                {% if is_locked %}
+                <div class="read-block {% if not application.motivation %}empty{% endif %}">{{ application.motivation or 'Not provided' }}</div>
+                {% else %}
+                <form method="post" action="/client/{{ program.slug }}/application/save">
+                    <input type="hidden" name="section" value="motivation">
+                    <textarea class="form-textarea mb-4" name="motivation"
+                              placeholder="What's drawn you to the profession? What does the next five years look like for you?">{{ application.motivation }}</textarea>
+                    <button type="submit" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium">Save section</button>
+                </form>
+                {% endif %}
+            </section>
+
+            {# ---- Experience ---- #}
+            <section id="section-experience" class="role-card rounded-2xl p-6 md:p-7 section-anchor">
+                <div class="flex items-baseline justify-between gap-3 mb-1">
+                    <h2 class="font-serif text-2xl">Experience</h2>
+                    {% if saved_section == 'experience' %}<span class="saved-flash">Saved</span>{% endif %}
+                </div>
+                <p class="text-sm mb-5" style="color: var(--text-muted);">Aviation activities and relevant work history.</p>
+                {% if is_locked %}
+                <div class="space-y-4">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.15em] mb-2" style="color: var(--text-muted);">Aviation experience</p>
+                        <div class="read-block {% if not application.aviation_experience %}empty{% endif %}">{{ application.aviation_experience or 'Not provided' }}</div>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.15em] mb-2" style="color: var(--text-muted);">Work experience</p>
+                        <div class="read-block {% if not application.work_experience %}empty{% endif %}">{{ application.work_experience or 'Not provided' }}</div>
+                    </div>
+                </div>
+                {% else %}
+                <form method="post" action="/client/{{ program.slug }}/application/save" class="space-y-4">
+                    <input type="hidden" name="section" value="experience">
+                    <div>
+                        <label class="form-label" for="aviation_experience">Aviation experience</label>
+                        <textarea class="form-textarea" id="aviation_experience" name="aviation_experience"
+                                  placeholder="Flying hours, licences, simulator time, gliding, ATC, anything aviation-adjacent.">{{ application.aviation_experience }}</textarea>
+                    </div>
+                    <div>
+                        <label class="form-label" for="work_experience">Work experience</label>
+                        <textarea class="form-textarea" id="work_experience" name="work_experience"
+                                  placeholder="Recent and relevant employment — focus on customer-facing, safety-critical, or team-leadership roles.">{{ application.work_experience }}</textarea>
+                    </div>
+                    <button type="submit" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium">Save section</button>
+                </form>
+                {% endif %}
+            </section>
+
+            {# ---- Funding ---- #}
+            <section id="section-funding" class="role-card rounded-2xl p-6 md:p-7 section-anchor">
+                <div class="flex items-baseline justify-between gap-3 mb-1">
+                    <h2 class="font-serif text-2xl">Funding</h2>
+                    {% if saved_section == 'funding' %}<span class="saved-flash">Saved</span>{% endif %}
+                    {% if saved_section == 'proof' %}<span class="saved-flash">Document uploaded</span>{% endif %}
+                    {% if saved_section == 'proof-error' %}<span class="saved-flash error">Upload failed &mdash; check the file type and size</span>{% endif %}
+                </div>
+                <p class="text-sm mb-5" style="color: var(--text-muted);">How much you need and how you'll cover the rest.</p>
+
+                {% if is_locked %}
+                <div class="grid md:grid-cols-3 gap-4 mb-5">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Total programme cost</p>
+                        <p class="font-serif text-xl">£{{ "{:,}".format(application.total_program_cost_gbp) }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Funding requested</p>
+                        <p class="font-serif text-xl">£{{ "{:,}".format(application.funding_requested_gbp) }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Self-funded gap</p>
+                        <p class="font-serif text-xl">£{{ "{:,}".format(application.funding_gap_gbp) }}</p>
+                    </div>
+                </div>
+                <div class="mb-4">
+                    <p class="text-xs uppercase tracking-[0.15em] mb-2" style="color: var(--text-muted);">How you'll fund the remainder</p>
+                    <div class="read-block {% if not application.self_funded_explanation %}empty{% endif %}">{{ application.self_funded_explanation or 'Not provided' }}</div>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.15em] mb-2" style="color: var(--text-muted);">Proof of funds</p>
+                    {% if application.proof_of_funds_filename %}
+                    <p class="text-sm">
+                        <a href="/client/{{ program.slug }}/application/files/proof_of_funds"
+                           class="hover:underline" style="color: var(--accent);">{{ application.proof_of_funds_filename }}</a>
+                    </p>
+                    {% else %}
+                    <p class="text-sm" style="color: var(--text-muted); font-style: italic;">Not provided</p>
+                    {% endif %}
+                </div>
+                {% else %}
+                <form method="post" action="/client/{{ program.slug }}/application/save" class="space-y-4">
+                    <input type="hidden" name="section" value="funding">
+                    <div class="grid md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="form-label" for="total_program_cost_gbp">Total programme cost (&pound;)</label>
+                            <input class="form-input" id="total_program_cost_gbp"
+                                   name="total_program_cost_gbp" type="number" min="0" step="1000"
+                                   value="{{ application.total_program_cost_gbp or '' }}"
+                                   placeholder="120000">
+                            <p class="form-hint">
+                                All-in: training, type rating, accommodation, exams.
+                                {% if application.total_program_cost_gbp %}
+                                <span style="color: var(--text);">£{{ "{:,}".format(application.total_program_cost_gbp) }}</span>
+                                {% endif %}
+                            </p>
+                        </div>
+                        <div>
+                            <label class="form-label" for="funding_requested_gbp">Funding requested (&pound;)</label>
+                            <input class="form-input" id="funding_requested_gbp"
+                                   name="funding_requested_gbp" type="number" min="0" step="1000"
+                                   value="{{ application.funding_requested_gbp or '' }}"
+                                   placeholder="90000">
+                            <p class="form-hint">
+                                The amount you'd like us to fund. The remainder is on you.
+                                {% if application.funding_requested_gbp %}
+                                <span style="color: var(--text);">£{{ "{:,}".format(application.funding_requested_gbp) }}</span>
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+                    {% if application.total_program_cost_gbp and application.funding_requested_gbp %}
+                    <div class="rounded-lg p-3 text-sm" style="background: var(--surface-warm); color: var(--text-muted);">
+                        Self-funded gap: <span style="color: var(--text); font-weight: 500;">£{{ "{:,}".format(application.funding_gap_gbp) }}</span>
+                    </div>
+                    {% endif %}
+                    <div>
+                        <label class="form-label" for="self_funded_explanation">How will you cover the remainder?</label>
+                        <textarea class="form-textarea" id="self_funded_explanation" name="self_funded_explanation"
+                                  placeholder="Savings, family contribution, secondary employment, secured loan — be specific. We'll match what you say here against your proof of funds.">{{ application.self_funded_explanation }}</textarea>
+                    </div>
+                    <button type="submit" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium">Save section</button>
+                </form>
+
+                <div class="mt-6 pt-5 border-t" style="border-color: var(--border);">
+                    <p class="form-label">Proof of funds</p>
+                    {% if application.proof_of_funds_filename %}
+                    <p class="text-sm mb-3">
+                        Uploaded:
+                        <a href="/client/{{ program.slug }}/application/files/proof_of_funds"
+                           class="hover:underline" style="color: var(--accent);">{{ application.proof_of_funds_filename }}</a>
+                    </p>
+                    {% endif %}
+                    <form method="post" enctype="multipart/form-data"
+                          action="/client/{{ program.slug }}/application/upload/proof-of-funds"
+                          class="flex flex-col md:flex-row md:items-center gap-3">
+                        <input type="file" name="proof_of_funds" accept=".pdf,.png,.jpg,.jpeg" required
+                               class="text-sm">
+                        <button type="submit" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap">
+                            {% if application.proof_of_funds_filename %}Replace document{% else %}Upload document{% endif %}
+                        </button>
+                    </form>
+                    <p class="form-hint">Bank statement, family loan letter, or similar. PDF / PNG / JPG, max 10 MB.</p>
+                </div>
+                {% endif %}
+            </section>
+
+            {# ---- CV ---- #}
+            <section id="section-cv" class="role-card rounded-2xl p-6 md:p-7 section-anchor">
+                <div class="flex items-baseline justify-between gap-3 mb-1">
+                    <h2 class="font-serif text-2xl">CV</h2>
+                    {% if saved_section == 'cv' %}<span class="saved-flash">Uploaded</span>{% endif %}
+                    {% if saved_section == 'cv-error' %}<span class="saved-flash error">Upload failed &mdash; check the file type and size</span>{% endif %}
+                </div>
+                <p class="text-sm mb-5" style="color: var(--text-muted);">Upload your CV (PDF, DOC, DOCX, max 10 MB).</p>
+
+                {% if application.cv_filename %}
+                <p class="text-sm mb-4">
+                    {% if is_locked %}File:{% else %}Uploaded:{% endif %}
+                    <a href="/client/{{ program.slug }}/application/files/cv"
+                       class="hover:underline" style="color: var(--accent);">{{ application.cv_filename }}</a>
+                </p>
+                {% elif is_locked %}
+                <p class="text-sm mb-4" style="color: var(--text-muted); font-style: italic;">No CV uploaded.</p>
+                {% endif %}
+
+                {% if not is_locked %}
+                <form method="post" enctype="multipart/form-data"
+                      action="/client/{{ program.slug }}/application/upload/cv"
+                      class="flex flex-col md:flex-row md:items-center gap-3">
+                    <input type="file" name="cv" accept=".pdf,.doc,.docx" required class="text-sm">
+                    <button type="submit" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap">
+                        {% if application.cv_filename %}Replace CV{% else %}Upload CV{% endif %}
+                    </button>
+                </form>
+                {% endif %}
+            </section>
+
+            {# ---- Video ---- #}
+            <section id="section-video" class="role-card rounded-2xl p-6 md:p-7 section-anchor">
+                <div class="flex items-baseline justify-between gap-3 mb-1">
+                    <h2 class="font-serif text-2xl">Video introduction</h2>
+                    {% if saved_section == 'video' %}<span class="saved-flash">Uploaded</span>{% endif %}
+                    {% if saved_section == 'video-error' %}<span class="saved-flash error">Upload failed &mdash; check the file type and size</span>{% endif %}
+                </div>
+                <p class="text-sm mb-5" style="color: var(--text-muted);">
+                    Optional but encouraged: a short self-intro (60-90 seconds). Upload a file or
+                    paste a link to one hosted elsewhere.
+                </p>
+
+                {% if application.video_filename %}
+                <p class="text-sm mb-4">
+                    Uploaded:
+                    <a href="/client/{{ program.slug }}/application/files/video"
+                       class="hover:underline" style="color: var(--accent);">{{ application.video_filename }}</a>
+                </p>
+                {% endif %}
+
+                {% if application.video_url %}
+                <p class="text-sm mb-4">
+                    External link:
+                    <a href="{{ application.video_url }}" target="_blank" rel="noopener"
+                       class="hover:underline break-all" style="color: var(--accent);">{{ application.video_url }}</a>
+                </p>
+                {% endif %}
+
+                {% if not is_locked %}
+                <form method="post" enctype="multipart/form-data"
+                      action="/client/{{ program.slug }}/application/upload/video"
+                      class="flex flex-col md:flex-row md:items-center gap-3 mb-5">
+                    <input type="file" name="video" accept=".mp4,.mov,.webm,.m4v" required class="text-sm">
+                    <button type="submit" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap">
+                        {% if application.video_filename %}Replace video{% else %}Upload video{% endif %}
+                    </button>
+                </form>
+
+                <div class="pt-5 border-t" style="border-color: var(--border);">
+                    <form method="post" action="/client/{{ program.slug }}/application/save" class="space-y-3">
+                        <input type="hidden" name="section" value="video">
+                        <label class="form-label" for="video_url">Or paste a link</label>
+                        <input class="form-input" id="video_url" name="video_url" type="url"
+                               value="{{ application.video_url or '' }}"
+                               placeholder="https://www.youtube.com/watch?v=…">
+                        <button type="submit" class="btn-primary px-4 py-2 rounded-lg text-sm font-medium">Save link</button>
+                    </form>
+                </div>
+                {% elif not application.video_filename and not application.video_url %}
+                <p class="text-sm" style="color: var(--text-muted); font-style: italic;">No video provided.</p>
+                {% endif %}
+            </section>
+        </div>
+    </div>
+</section>
+{% endblock %}

@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Education Financing{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #FAF9F5;
+            --surface: #FFFFFF;
+            --surface-warm: #F0EEE6;
+            --border: #E5E2D6;
+            --border-strong: #D9D6C7;
+            --text: #1F1E1D;
+            --text-muted: #6B6A65;
+            --accent: #C96342;
+            --accent-hover: #B5573A;
+            --accent-soft: #F4E5DD;
+        }
+        html, body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        .font-serif {
+            font-family: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+            font-feature-settings: "ss01", "ss02";
+            letter-spacing: -0.01em;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+            transition: background 120ms ease;
+        }
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+        .role-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+        }
+        .role-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+            box-shadow: 0 12px 32px -16px rgba(31, 30, 29, 0.18);
+        }
+        .role-card .arrow {
+            transition: transform 150ms ease, color 150ms ease;
+            color: var(--text-muted);
+        }
+        .role-card:hover .arrow {
+            transform: translateX(4px);
+            color: var(--accent);
+        }
+        input[type="text"], input[type="password"] {
+            background: var(--surface);
+            border: 1px solid var(--border-strong);
+            transition: border-color 120ms ease, box-shadow 120ms ease;
+        }
+        input[type="text"]:focus, input[type="password"]:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(201, 99, 66, 0.15);
+        }
+        /* Lightweight prose styling for rendered CV markdown. */
+        .prose-cv h3 {
+            font-family: 'Source Serif 4', Georgia, serif;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text);
+            margin-top: 1.75rem;
+            margin-bottom: 0.6rem;
+        }
+        .prose-cv h3:first-child { margin-top: 0; }
+        .prose-cv p {
+            color: var(--text-muted);
+            line-height: 1.65;
+            margin-bottom: 0.85rem;
+        }
+        .prose-cv ul {
+            list-style: disc;
+            padding-left: 1.4rem;
+            color: var(--text-muted);
+            line-height: 1.65;
+            margin-bottom: 1rem;
+        }
+        .prose-cv li { margin-bottom: 0.2rem; }
+        .prose-cv strong { color: var(--text); font-weight: 600; }
+        .prose-cv hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 1.5rem 0;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+    {% if username %}
+    <header class="border-b" style="border-color: var(--border);">
+        <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+            <a href="/{{ role }}" class="font-serif text-xl font-semibold tracking-tight">
+                Education Financing{% if role %} &mdash; {{ role|capitalize }}{% endif %}
+            </a>
+            <div class="relative" id="userMenu">
+                <button id="userMenuButton" type="button"
+                        class="w-9 h-9 rounded-full flex items-center justify-center transition"
+                        style="color: var(--text-muted);"
+                        aria-label="Account menu" aria-haspopup="menu" aria-expanded="false"
+                        onmouseover="this.style.background='var(--surface-warm)'; this.style.color='var(--text)';"
+                        onmouseout="this.style.background=''; this.style.color='var(--text-muted)';">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+                         fill="currentColor" class="w-5 h-5" aria-hidden="true">
+                        <path fill-rule="evenodd" d="M7.5 6a4.5 4.5 0 119 0 4.5 4.5 0 01-9 0zM3.751 20.105a8.25 8.25 0 0116.498 0 .75.75 0 01-.437.695A18.683 18.683 0 0112 22.5c-2.786 0-5.433-.608-7.812-1.7a.75.75 0 01-.437-.695z" clip-rule="evenodd"/>
+                    </svg>
+                </button>
+                <div id="userMenuDropdown"
+                     class="hidden absolute right-0 mt-2 w-56 rounded-xl overflow-hidden z-50"
+                     style="background: var(--surface); border: 1px solid var(--border); box-shadow: 0 16px 40px -16px rgba(31, 30, 29, 0.22);"
+                     role="menu" aria-labelledby="userMenuButton">
+                    <div class="px-4 py-3 border-b" style="border-color: var(--border);">
+                        <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Signed in as</p>
+                        <p class="text-sm font-medium mt-0.5">{{ username }}</p>
+                    </div>
+                    <div class="py-1">
+                        <button type="button" id="changePasswordButton"
+                                class="w-full text-left px-4 py-2 text-sm transition"
+                                role="menuitem"
+                                onmouseover="this.style.background='var(--surface-warm)';"
+                                onmouseout="this.style.background='';">
+                            Change password
+                        </button>
+                        <form method="post" action="/logout" class="block">
+                            <button type="submit"
+                                    class="w-full text-left px-4 py-2 text-sm transition"
+                                    role="menuitem"
+                                    onmouseover="this.style.background='var(--surface-warm)';"
+                                    onmouseout="this.style.background='';">
+                                Sign out
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+    {% endif %}
+    <main class="flex-1">
+        {% block content %}{% endblock %}
+    </main>
+    {% if username %}
+    <script>
+        (function () {
+            const button = document.getElementById('userMenuButton');
+            const dropdown = document.getElementById('userMenuDropdown');
+            if (!button || !dropdown) return;
+
+            function setOpen(isOpen) {
+                dropdown.classList.toggle('hidden', !isOpen);
+                button.setAttribute('aria-expanded', String(isOpen));
+            }
+
+            button.addEventListener('click', function (event) {
+                event.stopPropagation();
+                const isOpen = !dropdown.classList.contains('hidden');
+                setOpen(!isOpen);
+            });
+
+            document.addEventListener('click', function (event) {
+                if (!dropdown.contains(event.target) && event.target !== button) {
+                    setOpen(false);
+                }
+            });
+
+            document.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape') setOpen(false);
+            });
+        })();
+    </script>
+    {% endif %}
+</body>
+</html>

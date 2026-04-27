@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Client — Education Financing{% endblock %}
+{% block content %}
+<section class="max-w-6xl mx-auto px-6 pt-16 pb-10">
+    <div class="flex flex-col md:flex-row md:items-center gap-6">
+        <div class="w-24 h-24 rounded-full flex items-center justify-center font-serif text-4xl shrink-0"
+             style="background: {{ avatar_color_hex }}1F; color: {{ avatar_color_hex }};">{{ avatar_initials }}</div>
+        <div>
+            <p class="uppercase tracking-[0.2em] text-xs mb-2" style="color: var(--text-muted);">Your profile</p>
+            <h1 class="font-serif text-5xl mb-1 leading-[1.05]">Welcome back, {{ username }}.</h1>
+            {% if application %}
+            <p style="color: var(--text-muted);">
+                Application <span class="font-medium" style="color: var(--text);">{{ application.reference }}</span> &middot;
+                last updated {{ application.last_updated }}
+            </p>
+            {% else %}
+            <p style="color: var(--text-muted);">
+                You don't have an application open yet. Read the programme details, hear from past clients,
+                or jump straight to the application portal.
+            </p>
+            {% endif %}
+        </div>
+    </div>
+</section>
+
+{% if application %}
+{# --- In-flight application: render a status stepper. --- #}
+<section class="max-w-6xl mx-auto px-6 pb-12">
+    <div class="role-card rounded-2xl p-6 md:p-8">
+        <div class="flex items-baseline justify-between gap-4 flex-wrap">
+            <div>
+                <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Application status</p>
+                <h2 class="font-serif text-3xl">{{ status_labels[application.status] }}</h2>
+            </div>
+            <p class="text-sm" style="color: var(--text-muted);">{{ application.programme }}</p>
+        </div>
+
+        <ol class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
+            {% for step in status_order %}
+            {% set is_done = loop.index0 < current_step_index %}
+            {% set is_active = loop.index0 == current_step_index %}
+            <li class="flex items-start gap-3">
+                <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium shrink-0 mt-0.5"
+                     style="
+                        {% if is_done %}background: var(--accent); color: #fff;
+                        {% elif is_active %}background: var(--accent-soft); color: var(--accent-hover); border: 1.5px solid var(--accent);
+                        {% else %}background: var(--surface-warm); color: var(--text-muted);
+                        {% endif %}">
+                    {% if is_done %}&#10003;{% else %}{{ loop.index }}{% endif %}
+                </div>
+                <div class="min-w-0">
+                    <p class="text-sm font-medium {% if not is_done and not is_active %}opacity-70{% endif %}">
+                        {{ status_labels[step] }}
+                    </p>
+                    {% if is_active %}
+                    <p class="text-xs mt-0.5" style="color: var(--text-muted);">In progress</p>
+                    {% elif is_done %}
+                    <p class="text-xs mt-0.5" style="color: var(--text-muted);">Complete</p>
+                    {% endif %}
+                </div>
+            </li>
+            {% endfor %}
+        </ol>
+
+        <div class="mt-6 pt-6 border-t flex flex-wrap items-center justify-between gap-3" style="border-color: var(--border);">
+            <p class="text-sm" style="color: var(--text-muted);">
+                Continue editing or check the latest update from your reviewer.
+            </p>
+            <a href="/client/{{ application.program_slug }}/application"
+               class="btn-primary px-5 py-2 rounded-lg text-sm font-medium">
+                {{ cta_label }}
+            </a>
+        </div>
+    </div>
+</section>
+{% else %}
+{# --- No application yet: render every available programme as its own
+       widget. Each widget groups the three intro cards (About / Stories
+       / Apply) for that programme. --- #}
+<section class="max-w-6xl mx-auto px-6 pb-24 space-y-6">
+    {% for program in programs %}
+    <div class="rounded-2xl p-5 md:p-6"
+         style="border: 1px solid var(--border); background: var(--surface-warm);">
+        <div class="flex items-center justify-between gap-4 mb-5 px-1">
+            <div>
+                <p class="text-xs uppercase tracking-[0.18em] mb-1" style="color: var(--text-muted);">Programme</p>
+                <h2 class="font-serif text-2xl leading-tight">{{ program.display_name }}</h2>
+            </div>
+            <span class="text-xs uppercase tracking-[0.15em] px-2.5 py-1 rounded-full whitespace-nowrap"
+                  style="background: var(--surface); color: var(--text-muted); border: 1px solid var(--border);">
+                {{ program.status }}
+            </span>
+        </div>
+
+        <div class="grid md:grid-cols-3 gap-4">
+            <a href="/client/{{ program.slug }}/program" class="role-card rounded-2xl p-6 flex flex-col h-full">
+                <div class="flex items-start justify-between mb-8">
+                    <span class="text-xs uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                          style="background: var(--surface-warm); color: var(--text-muted);">About</span>
+                    <span class="arrow text-xl">&rarr;</span>
+                </div>
+                <h3 class="font-serif text-xl mb-1.5">Commercial Pilot Financing Program</h3>
+                <p class="text-sm" style="color: var(--text-muted);">
+                    How the programme works, who it's for, and what to expect.
+                </p>
+            </a>
+
+            <a href="/client/{{ program.slug }}/testimonials" class="role-card rounded-2xl p-6 flex flex-col h-full">
+                <div class="flex items-start justify-between mb-8">
+                    <span class="text-xs uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                          style="background: var(--surface-warm); color: var(--text-muted);">Stories</span>
+                    <span class="arrow text-xl">&rarr;</span>
+                </div>
+                <h3 class="font-serif text-xl mb-1.5">Testimonials</h3>
+                <p class="text-sm" style="color: var(--text-muted);">
+                    Hear from past clients who raised funding through the programme.
+                </p>
+            </a>
+
+            <a href="/client/{{ program.slug }}/application" class="role-card rounded-2xl p-6 flex flex-col h-full">
+                <div class="flex items-start justify-between mb-8">
+                    <span class="text-xs uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                          style="background: var(--surface-warm); color: var(--text-muted);">Apply</span>
+                    <span class="arrow text-xl">&rarr;</span>
+                </div>
+                <h3 class="font-serif text-xl mb-1.5">Application Portal</h3>
+                <p class="text-sm" style="color: var(--text-muted);">
+                    Open a new application when you're ready to apply.
+                </p>
+            </a>
+        </div>
+    </div>
+    {% endfor %}
+</section>
+{% endif %}
+{% endblock %}
