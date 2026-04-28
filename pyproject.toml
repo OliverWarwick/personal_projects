@@ -4,10 +4,12 @@ version = "0.1.0"
 description = "Personal projects"
 requires-python = ">=3.14"
 dependencies = [
-    "httpx>=0.28.1",
+    "aiosqlite>=0.22.1",
+    "httpx[http2]>=0.28.1",
     "parsel>=1.11.0",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
@@ -52,6 +54,9 @@ quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 # Pyright configuration
 [tool.pyright]
 pythonVersion = "3.14"
@@ -64,4 +69,6 @@ reportMissingTypeStubs = false
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "pyyaml>=6.0.3",
+    "respx>=0.22.0",
 ]

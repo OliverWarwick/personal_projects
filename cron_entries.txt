@@ -1,0 +1,6 @@
+# ---- BEGIN rightmove_scrapper ----
+# Poll job: scrape Rightmove for all configs and write to DB
+*/15 * * * * cd /Users/ollywarwick/playground/personal_projects && /opt/homebrew/bin/uv run python -m src.apps.rightmove_scrapper.poll_job >> data/poll.log 2>&1
+# Notify job: report new listings discovered since the last poll
+5,20,35,50 * * * * cd /Users/ollywarwick/playground/personal_projects && /opt/homebrew/bin/uv run python -m src.apps.rightmove_scrapper.notify_job >> data/notify.log 2>&1
+# ---- END rightmove_scrapper ----

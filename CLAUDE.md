@@ -7,6 +7,7 @@ This is a personal projects repo — a collection of independent scripts and sma
 - Clean, readable, and maintainable code
 - Use `ruff` for linting and formatting (`uv run ruff check` / `uv run ruff format`)
 - Type checking with `pyright` (`uv run pyright`)
+- Always use absolute imports — never relative imports (no `from .foo import bar`)
 
 ## Testing
 
