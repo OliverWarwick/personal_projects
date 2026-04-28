@@ -9,9 +9,8 @@ import json
 import re
 
 import httpx
-from parsel import Selector
 
-from .models import Address, Price, PropertyDetail
+from src.clients.rightmove.models import Address, Price, PropertyDetail
 
 PROPERTY_URL = "https://www.rightmove.co.uk/properties/{property_id}"
 _PAGE_MODEL_RE = re.compile(r"window\.PAGE_MODEL\s*=\s*(\{.*?\});", re.DOTALL)
