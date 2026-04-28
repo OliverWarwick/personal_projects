@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Investor — Education Financing{% endblock %}
+{% block content %}
+<section class="max-w-6xl mx-auto px-6 pt-16 pb-12">
+    <h1 class="font-serif text-5xl mb-3 leading-[1.05]">Welcome back.</h1>
+</section>
+
+<section class="max-w-6xl mx-auto px-6 pb-24">
+    <div class="grid md:grid-cols-3 gap-5">
+        <a href="/investor/opportunities?tab=funds" class="role-card rounded-2xl p-6 flex flex-col h-full">
+            <div class="flex items-start justify-between mb-8">
+                <span class="text-xs uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                      style="background: var(--surface-warm); color: var(--text-muted);">Open</span>
+                <span class="arrow text-xl">&rarr;</span>
+            </div>
+            <h2 class="font-serif text-xl mb-1.5">Fund Investments</h2>
+            <p class="text-sm" style="color: var(--text-muted);">
+                Browse and back open funds.
+            </p>
+        </a>
+
+        <a href="/investor/opportunities?tab=p2p" class="role-card rounded-2xl p-6 flex flex-col h-full">
+            <div class="flex items-start justify-between mb-8">
+                <span class="text-xs uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                      style="background: var(--surface-warm); color: var(--text-muted);">Direct</span>
+                <span class="arrow text-xl">&rarr;</span>
+            </div>
+            <h2 class="font-serif text-xl mb-1.5">Peer to Peer Investments</h2>
+            <p class="text-sm" style="color: var(--text-muted);">
+                Back individual cadets directly through the marketplace.
+            </p>
+        </a>
+
+        <a href="/investor/portfolio" class="role-card rounded-2xl p-6 flex flex-col h-full">
+            <div class="flex items-start justify-between mb-8">
+                <span class="text-xs uppercase tracking-[0.18em] px-2.5 py-1 rounded-full"
+                      style="background: var(--surface-warm); color: var(--text-muted);">Yours</span>
+                <span class="arrow text-xl">&rarr;</span>
+            </div>
+            <h2 class="font-serif text-xl mb-1.5">Portfolio</h2>
+            <p class="text-sm" style="color: var(--text-muted);">
+                Track your active positions, returns, and placements.
+            </p>
+        </a>
+    </div>
+</section>
+{% endblock %}

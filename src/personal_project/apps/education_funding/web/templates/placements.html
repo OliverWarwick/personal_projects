@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Placements — {{ fund.name }} — Education Financing{% endblock %}
+{% block content %}
+<section class="max-w-5xl mx-auto px-6 pt-12 pb-6">
+    <a href="/investor/opportunities/funds/{{ fund.slug }}" class="text-sm hover:underline mb-8 inline-block"
+       style="color: var(--text-muted);">&larr; Back to {{ fund.name }}</a>
+
+    <p class="uppercase tracking-[0.2em] text-xs mb-3" style="color: var(--text-muted);">{{ fund.name }}</p>
+    <h1 class="font-serif text-4xl mb-3 leading-[1.05]">Placements</h1>
+    <p class="max-w-2xl" style="color: var(--text-muted);">
+        Cadets currently funded through this fund.
+        <span style="color: var(--text);">{{ placements|length }}</span>
+        of <span style="color: var(--text);">{{ fund.placements_target }}</span> target placements made.
+    </p>
+</section>
+
+<section class="max-w-5xl mx-auto px-6 pt-6 pb-24">
+{% if placements %}
+    <div class="space-y-3">
+        {% for placement in placements %}
+        <a href="/investor/opportunities/p2p/{{ placement.cadet.slug }}"
+           class="role-card rounded-2xl p-5 md:p-6 flex flex-col md:flex-row md:items-center gap-5">
+            <div class="flex items-start gap-4 flex-1 min-w-0">
+                <div class="w-11 h-11 rounded-full flex items-center justify-center font-serif text-base shrink-0"
+                     style="background: {{ placement.cadet.avatar_color_hex }}1F; color: {{ placement.cadet.avatar_color_hex }};">
+                    {{ placement.cadet.initials }}
+                </div>
+                <div class="min-w-0">
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <h3 class="font-serif text-xl leading-tight">{{ placement.cadet.name }}</h3>
+                        <span class="text-xs uppercase tracking-[0.15em] px-2 py-0.5 rounded-full"
+                              style="background: var(--accent-soft); color: var(--accent-hover);">
+                            {{ placement.stage }}
+                        </span>
+                    </div>
+                    <p class="text-xs mt-1" style="color: var(--text-muted);">
+                        {{ placement.cadet.archetype }} &middot; {{ placement.cadet.location }} &middot; Age {{ placement.cadet.age }}
+                    </p>
+                    <p class="text-sm mt-2" style="color: var(--text-muted);">{{ placement.cadet.background }}</p>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-2 gap-4 md:min-w-[300px] md:text-right">
+                <div>
+                    <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Programme</p>
+                    <p class="text-sm font-medium mt-1">{{ placement.cadet.airline_programme.display_name }}</p>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Funded</p>
+                    <p class="text-sm font-medium mt-1">£{{ "{:,}".format(placement.funded_amount_gbp) }}</p>
+                    <p class="text-xs" style="color: var(--text-muted);">{{ placement.placement_date }}</p>
+                </div>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+{% else %}
+    <p style="color: var(--text-muted);">No placements made yet.</p>
+{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}{{ cadet.name }} — Education Financing{% endblock %}
+{% block content %}
+{% set b = cadet.funding_breakdown %}
+{% set color_secured = '#7A8B6F' %}
+{% set color_remaining = '#C96342' %}
+{% set color_self = '#5B7BA3' %}
+<section class="max-w-6xl mx-auto px-6 pt-12 pb-24">
+    <a href="/investor/opportunities?tab=p2p" class="text-sm hover:underline mb-8 inline-block"
+       style="color: var(--text-muted);">&larr; Back to Peer to Peer</a>
+
+    <div class="grid lg:grid-cols-[minmax(0,1fr)_320px] gap-10">
+        <div class="min-w-0">
+            <div class="flex flex-col md:flex-row md:items-start gap-6 mb-12">
+                <div class="w-24 h-24 rounded-full flex items-center justify-center font-serif text-3xl shrink-0"
+                     style="background: {{ cadet.avatar_color_hex }}1F; color: {{ cadet.avatar_color_hex }};">
+                    {{ cadet.initials }}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="uppercase tracking-[0.2em] text-xs mb-2" style="color: var(--text-muted);">Candidate Profile</p>
+                    <h1 class="font-serif text-4xl mb-2 leading-[1.05]">{{ cadet.name }}</h1>
+                    <p style="color: var(--text-muted);">
+                        {{ cadet.archetype }} &middot; {{ cadet.location }} &middot; Age {{ cadet.age }}
+                    </p>
+                    <div class="mt-5">
+                        <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Programme</p>
+                        <p class="text-sm font-medium mt-1">{{ cadet.airline_programme.display_name }}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mb-12">
+                <h2 class="font-serif text-2xl mb-3">Video</h2>
+                <div class="rounded-2xl overflow-hidden" style="border: 1px solid var(--border); background: #000; aspect-ratio: 16 / 9;">
+                    <iframe class="w-full h-full" style="display: block;"
+                            src="https://www.youtube.com/embed/{{ video_id }}"
+                            title="Pilot career interview (placeholder)"
+                            frameborder="0"
+                            allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            referrerpolicy="strict-origin-when-cross-origin"
+                            allowfullscreen></iframe>
+                </div>
+                <p class="text-xs mt-2" style="color: var(--text-muted);">
+                    Placeholder clip &mdash; to be replaced with the cadet's own intro video.
+                </p>
+            </div>
+
+            <div>
+                <h2 class="font-serif text-2xl mb-3">CV</h2>
+                {% if cv_html %}
+                <div class="role-card rounded-2xl p-7 md:p-9 prose-cv">
+                    {{ cv_html|safe }}
+                </div>
+                {% else %}
+                <div class="role-card rounded-2xl p-7" style="color: var(--text-muted);">
+                    CV not available yet.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <aside>
+            <div class="role-card rounded-2xl p-6 lg:sticky lg:top-6">
+                <div class="grid grid-cols-2 lg:grid-cols-1 gap-5 mb-6">
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Funding Sought</p>
+                        <p class="font-serif text-2xl mt-1.5">£{{ "{:,}".format(b.sought_gbp) }}</p>
+                    </div>
+                    <div>
+                        <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Funding Secured</p>
+                        <p class="font-serif text-2xl mt-1.5">£{{ "{:,}".format(b.secured_gbp) }}</p>
+                    </div>
+                </div>
+
+                <div class="pt-5 border-t" style="border-color: var(--border);">
+                    <svg viewBox="0 0 36 36" class="w-44 h-44 mx-auto block" role="img"
+                         aria-label="Funding breakdown across secured, remaining, and self-funded">
+                        <circle cx="18" cy="18" r="15.91549430918954"
+                                fill="transparent" stroke="var(--surface-warm)" stroke-width="3.4"
+                                pathLength="100"/>
+                        <g transform="rotate(-90 18 18)">
+                            {% if b.secured_pct > 0 %}
+                            <circle cx="18" cy="18" r="15.91549430918954"
+                                    fill="transparent" stroke="{{ color_secured }}" stroke-width="3.4"
+                                    pathLength="100"
+                                    stroke-dasharray="{{ '%.2f'|format(b.secured_pct) }} 100"
+                                    stroke-dashoffset="0" stroke-linecap="butt"/>
+                            {% endif %}
+                            {% if b.remaining_pct > 0 %}
+                            <circle cx="18" cy="18" r="15.91549430918954"
+                                    fill="transparent" stroke="{{ color_remaining }}" stroke-width="3.4"
+                                    pathLength="100"
+                                    stroke-dasharray="{{ '%.2f'|format(b.remaining_pct) }} 100"
+                                    stroke-dashoffset="-{{ '%.2f'|format(b.secured_pct) }}" stroke-linecap="butt"/>
+                            {% endif %}
+                            {% if b.self_funded_pct > 0 %}
+                            <circle cx="18" cy="18" r="15.91549430918954"
+                                    fill="transparent" stroke="{{ color_self }}" stroke-width="3.4"
+                                    pathLength="100"
+                                    stroke-dasharray="{{ '%.2f'|format(b.self_funded_pct) }} 100"
+                                    stroke-dashoffset="-{{ '%.2f'|format(b.secured_pct + b.remaining_pct) }}" stroke-linecap="butt"/>
+                            {% endif %}
+                        </g>
+                        <text x="18" y="16.5" text-anchor="middle"
+                              style="font-family: Inter, system-ui; font-size: 2.6px;"
+                              fill="var(--text-muted)">Total cost</text>
+                        <text x="18" y="21.5" text-anchor="middle"
+                              style="font-family: 'Source Serif 4', Georgia, serif; font-size: 4.4px; font-weight: 600;"
+                              fill="var(--text)">£{{ "{:,}".format(b.total_cost_gbp) }}</text>
+                    </svg>
+                </div>
+
+                <div class="mt-5 space-y-2.5 text-sm">
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full" style="background: {{ color_secured }};"></span>
+                            <span style="color: var(--text-muted);">Secured</span>
+                        </div>
+                        <span class="font-medium">£{{ "{:,}".format(b.secured_gbp) }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full" style="background: {{ color_remaining }};"></span>
+                            <span style="color: var(--text-muted);">Remaining</span>
+                        </div>
+                        <span class="font-medium">£{{ "{:,}".format(b.remaining_gbp) }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full" style="background: {{ color_self }};"></span>
+                            <span style="color: var(--text-muted);">Self&#8209;funded</span>
+                        </div>
+                        <span class="font-medium">£{{ "{:,}".format(b.self_funded_gbp) }}</span>
+                    </div>
+                    <div class="flex items-center justify-between pt-2.5 border-t" style="border-color: var(--border);">
+                        <span class="font-medium">Total</span>
+                        <span class="font-medium">£{{ "{:,}".format(b.total_cost_gbp) }}</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </div>
+</section>
+{% endblock %}

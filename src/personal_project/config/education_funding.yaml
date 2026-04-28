@@ -1,0 +1,2 @@
+database_url: "sqlite:///education_funding.db"
+session_secret: "ygcJz6E_w4_eQ6Bh42M9SCTUHfcT2ekdVl2Z8qwiD-Y"

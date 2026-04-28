@@ -1,0 +1,417 @@
+{% extends "base.html" %}
+{% block title %}{{ fund.name }} — Education Financing{% endblock %}
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<section class="max-w-4xl mx-auto px-6 pt-12 pb-24">
+    <a href="/investor/opportunities?tab=funds" class="text-sm hover:underline mb-8 inline-block"
+       style="color: var(--text-muted);">&larr; Back to Investment Opportunities</a>
+
+    <div class="flex items-center gap-3 mb-3">
+        <span class="text-xs uppercase tracking-[0.18em] px-2 py-0.5 rounded-full"
+              style="background: var(--accent-soft); color: var(--accent-hover);">
+            {{ fund.status }}
+        </span>
+        <span class="text-xs uppercase tracking-[0.2em]" style="color: var(--text-muted);">Fund</span>
+    </div>
+    <h1 class="font-serif text-5xl mb-4 leading-[1.05]">{{ fund.name }}</h1>
+    <p class="text-lg max-w-2xl" style="color: var(--text-muted);">{{ fund.strategy }}</p>
+
+    <!-- Row 1: key fund metrics -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-10 mb-4">
+        <div class="role-card rounded-xl p-4">
+            <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Target size</p>
+            <p class="font-serif text-2xl mt-1.5">£{{ "{:,}".format(fund.target_size_gbp) }}</p>
+        </div>
+        <div class="role-card rounded-xl p-4">
+            <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Raised</p>
+            <p class="font-serif text-2xl mt-1.5">£{{ "{:,}".format(fund.raised_gbp) }}</p>
+            <p class="text-xs mt-1" style="color: var(--text-muted);">{{ fund.raised_pct }}% of target</p>
+        </div>
+        <div class="role-card rounded-xl p-4">
+            <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Projected IRR</p>
+            <p id="widget-irr" class="font-serif text-2xl mt-1.5">&mdash;</p>
+            <p class="text-xs mt-1" style="color: var(--text-muted);">Illustrative</p>
+        </div>
+        <div class="role-card rounded-xl p-4">
+            <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Projected CAGR</p>
+            <p id="widget-cagr" class="font-serif text-2xl mt-1.5">&mdash;</p>
+        </div>
+    </div>
+
+    <!-- Row 2: deployment and repayment metrics -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-12">
+        <a href="/investor/opportunities/funds/{{ fund.slug }}/placements"
+           class="role-card rounded-xl p-4 flex flex-col group">
+            <div class="flex items-start justify-between">
+                <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Placements made</p>
+                <span class="arrow text-sm">&rarr;</span>
+            </div>
+            <p class="font-serif text-2xl mt-1.5">{{ fund.placements_made }}</p>
+            <p class="text-xs mt-1" style="color: var(--text-muted);">of {{ fund.placements_target }} target</p>
+        </a>
+        <div class="role-card rounded-xl p-4">
+            <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Capital deployed</p>
+            <p class="font-serif text-2xl mt-1.5">&mdash;</p>
+        </div>
+        <div class="role-card rounded-xl p-4">
+            <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Avg. repayment term</p>
+            <p id="widget-term" class="font-serif text-2xl mt-1.5">&mdash;</p>
+            <p class="text-xs mt-1" style="color: var(--text-muted);">Illustrative</p>
+        </div>
+        <div class="role-card rounded-xl p-4">
+            <p class="text-xs uppercase tracking-[0.15em]" style="color: var(--text-muted);">Status</p>
+            <p class="font-serif text-2xl mt-1.5">{{ fund.status }}</p>
+        </div>
+    </div>
+
+    <!-- Objectives -->
+    <div class="mb-10">
+        <h2 class="font-serif text-2xl mb-3">Objectives</h2>
+        <p style="color: var(--text-muted); line-height: 1.7;">{{ fund.objectives }}</p>
+    </div>
+
+    <!-- Repayment Structure -->
+    <div class="mb-10">
+        <h2 class="font-serif text-2xl mb-3">Repayment Structure</h2>
+        <p style="color: var(--text-muted); line-height: 1.7;" class="mb-4">
+            Each placement is structured as an Income Share Agreement (ISA). Once the funded
+            pilot enters paid employment, the fund receives <strong style="color: var(--text);">15% of gross annual base salary</strong>
+            for a period of <strong style="color: var(--text);">twenty years</strong> from the date of first disbursement.
+            The obligation is discharged in full — regardless of the time elapsed — if and when
+            cumulative repayments reach <strong style="color: var(--text);">three times the principal advanced</strong>.
+        </p>
+        <p style="color: var(--text-muted); line-height: 1.7;" class="mb-4">
+            Repayment obligations are governed by a legally binding Income Share Agreement executed
+            prior to disbursement. The agreement includes standard provisions covering assignment
+            of future earnings, event-of-default triggers, and step-in rights, ensuring the
+            fund's position is protected throughout the repayment period.
+        </p>
+        <div class="rounded-xl p-5 mt-4" style="background: var(--surface); border: 1px solid var(--border);">
+            <div class="grid md:grid-cols-3 gap-5">
+                <div>
+                    <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Income share rate</p>
+                    <p class="font-serif text-xl">15% per annum</p>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Maximum term</p>
+                    <p class="font-serif text-xl">20 years</p>
+                </div>
+                <div>
+                    <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Repayment cap</p>
+                    <p class="font-serif text-xl">3× principal</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Illustrative projections -->
+    <div class="mb-2">
+        <h2 class="font-serif text-2xl mb-1">Illustrative Projections</h2>
+        <p class="text-sm mb-6" style="color: var(--text-muted);">
+            Based on published base-salary data for easyJet and Ryanair, inflation-adjusted at
+            2% per annum compounding. Repayments modelled at 15% of annual base salary on a
+            representative £115,000 placement (integrated ATPL tuition, mid-market rate).
+            Figures are illustrative only and do not constitute a forecast.
+        </p>
+    </div>
+    <div class="grid md:grid-cols-2 gap-6 mb-14">
+        <div class="role-card rounded-xl p-5">
+            <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Salary Progression</p>
+            <p class="text-sm mb-4" style="color: var(--text-muted);">Annual base salary (£) by career year</p>
+            <canvas id="salaryChart" height="220"></canvas>
+        </div>
+        <div class="role-card rounded-xl p-5">
+            <p class="text-xs uppercase tracking-[0.15em] mb-1" style="color: var(--text-muted);">Return on Investment</p>
+            <p class="text-sm mb-4" style="color: var(--text-muted);">Cumulative return as a multiple of capital advanced (£115k example)</p>
+            <canvas id="roiChart" height="220"></canvas>
+        </div>
+    </div>
+
+    <div class="space-y-10">
+
+        <!-- Fee Structure -->
+        <div>
+            <h2 class="font-serif text-2xl mb-3">Fee Structure</h2>
+            <p style="color: var(--text-muted); line-height: 1.7;" class="mb-4">
+                The platform applies a simple, transparent two-part fee schedule. There are no
+                hidden charges, management fees, or performance carries beyond the terms set out below.
+            </p>
+            <div class="rounded-xl overflow-hidden mt-4" style="border: 1px solid var(--border);">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr style="background: var(--surface-warm); border-bottom: 1px solid var(--border);">
+                            <th class="text-left px-5 py-3 text-xs uppercase tracking-[0.15em]"
+                                style="color: var(--text-muted); font-weight: 500;">Fee</th>
+                            <th class="text-left px-5 py-3 text-xs uppercase tracking-[0.15em]"
+                                style="color: var(--text-muted); font-weight: 500;">Rate</th>
+                            <th class="text-left px-5 py-3 text-xs uppercase tracking-[0.15em]"
+                                style="color: var(--text-muted); font-weight: 500;">Basis</th>
+                        </tr>
+                    </thead>
+                    <tbody style="background: var(--surface);">
+                        <tr style="border-bottom: 1px solid var(--border);">
+                            <td class="px-5 py-4" style="color: var(--text);">Origination fee</td>
+                            <td class="px-5 py-4 font-medium" style="color: var(--text);">1.5%</td>
+                            <td class="px-5 py-4" style="color: var(--text-muted);">
+                                Applied once at the point of each new placement, calculated on the
+                                total principal advanced to that candidate.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="px-5 py-4" style="color: var(--text);">Repayment administration fee</td>
+                            <td class="px-5 py-4 font-medium" style="color: var(--text);">1.5%</td>
+                            <td class="px-5 py-4" style="color: var(--text-muted);">
+                                Applied to each repayment receipt as it is collected and passed
+                                through to investors.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="border-t pt-8" style="border-color: var(--border);">
+            <p class="text-sm" style="color: var(--text-muted);">
+                Detailed terms, fee schedule, risk factors, and investor documentation
+                will appear here as the fund details are filled in.
+            </p>
+        </div>
+    </div>
+</section>
+
+<script>
+(function () {
+    const MUTED   = '#6B6A65';
+    const BORDER  = '#E5E2D6';
+    const ACCENT  = '#C96342';
+    const BLUE    = '#2563EB';
+    const DASHED  = '#C8C5B8';
+
+    const YEARS = ['Yr 1', 'Yr 2', 'Yr 3', 'Yr 4', 'Yr 5',
+                   'Yr 6', 'Yr 7', 'Yr 8', 'Yr 9', 'Yr 10',
+                   'Yr 11', 'Yr 12', 'Yr 13', 'Yr 14', 'Yr 15',
+                   'Yr 16', 'Yr 17', 'Yr 18', 'Yr 19', 'Yr 20'];
+
+    const INFLATION        = 0.02;    // annual compounding rate applied to forward salaries
+    const INCOME_SHARE     = 0.15;    // ISA repayment rate
+    const PRINCIPAL        = 115000;  // example placement size (£) — representative integrated ATPL tuition
+    const ORIGINATION_FEE  = 0.015;   // taken from principal at disbursement
+    const ADMIN_FEE        = 0.015;   // deducted from each repayment receipt
+
+    // Base salary data (£, today's terms) — inflation applied below.
+    // Years 11-20 held at senior captain rate.
+    const easyjetBase = [57235, 60440, 67628, 71416, 75446, 83020, 83020, 144597, 151827, 166287,
+                         166287, 166287, 166287, 166287, 166287, 166287, 166287, 166287, 166287, 166287];
+    const ryanairBase = [48000, 48000, 57500, 57500, 68000, 68000, 80000, 110500, 110500, 132000,
+                         132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000];
+
+    // Apply compounding inflation: year i (1-indexed) → salary * (1 + r)^i
+    function inflationAdjust(salaries) {
+        return salaries.map((s, i) => Math.round(s * Math.pow(1 + INFLATION, i + 1)));
+    }
+
+    // Cumulative net ISA repayments (after admin fee) as a multiple of principal
+    function cumulativeRoi(adjustedSalaries) {
+        let cum = 0;
+        return adjustedSalaries.map(s => {
+            cum += s * INCOME_SHARE * (1 - ADMIN_FEE);
+            return parseFloat((Math.min(cum, PRINCIPAL * 3) / PRINCIPAL).toFixed(2));
+        });
+    }
+
+    const easyjetSalary = inflationAdjust(easyjetBase);
+    const ryanairSalary = inflationAdjust(ryanairBase);
+    const easyjetRoi    = cumulativeRoi(easyjetSalary);
+    const ryanairRoi    = cumulativeRoi(ryanairSalary);
+    const breakeven     = Array(20).fill(1.0);
+    const cap           = Array(20).fill(3.0);
+
+    // --- Widget metrics ---
+
+    function computeMetrics(adjustedSalaries) {
+        const repaymentCap  = PRINCIPAL * 3;
+        const netPrincipal  = PRINCIPAL * (1 - ORIGINATION_FEE);  // capital actually deployed after fee
+
+        // Net annual receipts after admin fee
+        const netReceipts = adjustedSalaries.map(s => s * INCOME_SHARE * (1 - ADMIN_FEE));
+
+        // Cash flows (investor perspective): t=0 outflow is full principal, receipts are net of fees
+        const cf = [-PRINCIPAL, ...netReceipts];
+
+        // IRR via Newton-Raphson
+        let r = 0.1;
+        for (let iter = 0; iter < 200; iter++) {
+            let npv = 0, dnpv = 0;
+            for (let t = 0; t < cf.length; t++) {
+                const d = Math.pow(1 + r, t);
+                npv  += cf[t] / d;
+                dnpv -= t * cf[t] / (d * (1 + r));
+            }
+            if (Math.abs(dnpv) < 1e-10) break;
+            const delta = npv / dnpv;
+            r -= delta;
+            if (Math.abs(delta) < 1e-8) break;
+        }
+
+        // Payback term: first year cumulative net receipts return the principal
+        let cum = 0, termYears = adjustedSalaries.length;
+        for (let i = 0; i < netReceipts.length; i++) {
+            cum += netReceipts[i];
+            if (cum >= PRINCIPAL) { termYears = i + 1; break; }
+        }
+
+        // CAGR: annualised growth from principal to total net returned over the payback term
+        const totalReturned = Math.min(cum, repaymentCap);
+        const cagr = Math.pow(totalReturned / PRINCIPAL, 1 / termYears) - 1;
+
+        return { irr: r, cagr, termYears };
+    }
+
+    const ejM = computeMetrics(easyjetSalary);
+    const rrM = computeMetrics(ryanairSalary);
+
+    function pct(v) { return (v * 100).toFixed(1) + '%'; }
+
+    document.getElementById('widget-irr').textContent  = pct((ejM.irr  + rrM.irr)  / 2);
+    document.getElementById('widget-cagr').textContent = pct((ejM.cagr + rrM.cagr) / 2);
+    document.getElementById('widget-term').textContent =
+        Math.round((ejM.termYears + rrM.termYears) / 2) + ' yrs';
+
+    const sharedScaleOptions = {
+        grid: { color: BORDER },
+        ticks: { color: MUTED, font: { size: 11 } },
+    };
+
+    const sharedLegend = {
+        labels: { color: MUTED, font: { size: 11 }, boxWidth: 12, padding: 14 },
+    };
+
+    // Salary chart
+    new Chart(document.getElementById('salaryChart'), {
+        type: 'line',
+        data: {
+            labels: YEARS,
+            datasets: [
+                {
+                    label: 'easyJet',
+                    data: easyjetSalary.map(v => Math.round(v / 1000)),
+                    borderColor: ACCENT,
+                    backgroundColor: ACCENT + '18',
+                    fill: true,
+                    tension: 0.35,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                },
+                {
+                    label: 'Ryanair',
+                    data: ryanairSalary.map(v => Math.round(v / 1000)),
+                    borderColor: BLUE,
+                    backgroundColor: BLUE + '18',
+                    fill: true,
+                    tension: 0.35,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: sharedLegend,
+                tooltip: {
+                    callbacks: {
+                        label: ctx => ' ' + ctx.dataset.label + ': £' + ctx.parsed.y + 'k',
+                    },
+                },
+            },
+            scales: {
+                x: sharedScaleOptions,
+                y: {
+                    ...sharedScaleOptions,
+                    ticks: {
+                        color: MUTED,
+                        font: { size: 11 },
+                        callback: v => '£' + v + 'k',
+                    },
+                },
+            },
+        },
+    });
+
+    // ROI chart
+    new Chart(document.getElementById('roiChart'), {
+        type: 'line',
+        data: {
+            labels: YEARS,
+            datasets: [
+                {
+                    label: 'easyJet',
+                    data: easyjetRoi,
+                    borderColor: ACCENT,
+                    backgroundColor: ACCENT + '18',
+                    fill: false,
+                    tension: 0.35,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                },
+                {
+                    label: 'Ryanair',
+                    data: ryanairRoi,
+                    borderColor: BLUE,
+                    backgroundColor: BLUE + '18',
+                    fill: false,
+                    tension: 0.35,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                },
+                {
+                    label: 'Breakeven (1×)',
+                    data: breakeven,
+                    borderColor: DASHED,
+                    borderDash: [4, 4],
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    fill: false,
+                },
+                {
+                    label: 'Cap (3×)',
+                    data: cap,
+                    borderColor: DASHED,
+                    borderDash: [4, 4],
+                    borderWidth: 1.5,
+                    pointRadius: 0,
+                    fill: false,
+                },
+            ],
+        },
+        options: {
+            responsive: true,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: sharedLegend,
+                tooltip: {
+                    callbacks: {
+                        label: ctx => ' ' + ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + '×',
+                    },
+                },
+            },
+            scales: {
+                x: sharedScaleOptions,
+                y: {
+                    ...sharedScaleOptions,
+                    min: 0,
+                    max: 3.2,
+                    title: {
+                        display: true,
+                        text: '× principal returned',
+                        color: MUTED,
+                        font: { size: 11 },
+                    },
+                },
+            },
+        },
+    });
+})();
+</script>
+{% endblock %}
