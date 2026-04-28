@@ -1,3 +1,0 @@
-# Ignore local settings with sensitive data
-settings.local.yaml
-*.local.yaml
