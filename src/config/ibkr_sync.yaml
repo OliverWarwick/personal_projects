@@ -1,0 +1,14 @@
+# IBKR Sync Configuration
+#
+# Values may be supplied either here or via environment variables. Environment
+# variables take precedence so secrets do not need to live on disk.
+#
+#   IBKR_FLEX_TOKEN              - Flex Web Service token from IBKR Account Management
+#   IBKR_FLEX_ACTIVITY_QUERY     - Flex Query ID for activity (trades + cash transactions)
+#   IBKR_FLEX_PORTFOLIO_QUERY    - Flex Query ID for portfolio (NAV + open positions)
+#   IBKR_DATABASE_URL            - SQLAlchemy URL (default: sqlite:///ibkr_data.db)
+
+token: null
+activity_query_id: null
+portfolio_query_id: null
+database_url: sqlite:///ibkr_data.db

@@ -20,13 +20,23 @@ dependencies = [
     "itsdangerous>=2.2.0",
     "python-multipart>=0.0.18",
     "markdown>=3.7",
+    "ibflex>=0.15",
+    "yfinance>=0.2.50",
+    "pyarrow>=24.0.0",
+    "python-dotenv>=1.2.2",
+    "aiosqlite>=0.22.1",
+    "parsel>=1.11.0",
+    "pydantic>=2.12.5",
 ]
 
 [project.scripts]
-tennis-court-booker = "personal_project.apps.tennis_court_booker.run:main"
-finance-sync = "personal_project.apps.finance_sync.run:main"
-bank-sync = "personal_project.apps.bank_sync.run:main"
-education-funding = "personal_project.apps.education_funding.run:main"
+tennis-court-booker = "src.apps.tennis_court_booker.run:main"
+finance-sync = "src.apps.finance_sync.run:main"
+bank-sync = "src.apps.bank_sync.run:main"
+education-funding = "src.apps.education_funding.run:main"
+ibkr-sync = "src.apps.ibkr_sync.run:main"
+finances-dashboard = "src.apps.finances_dashboard.run:main"
+finances-cache-warm = "src.apps.finances_dashboard.warm_cache:main"
 
 [project.optional-dependencies]
 dev = [
@@ -46,10 +56,10 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/personal_project/_version.py"
+version-file = "src/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/personal_project"]
+packages = ["src"]
 
 # Ruff configuration
 [tool.ruff]
@@ -126,7 +136,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = [
     "--verbose",
-    "--cov=src/personal_project",
+    "--cov=src",
     "--cov-report=term-missing",
     "--cov-fail-under=0",
     "-m", "not integration",
@@ -171,4 +181,5 @@ dev = [
     "commitizen>=4.4.0",
     "pandas-stubs>=3.0.0.260204",
     "pip-audit>=2.10.0",
+    "respx>=0.22.0",
 ]

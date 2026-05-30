@@ -1,0 +1,63 @@
+# Hargreaves Lansdown instrument URL map.
+#
+# HL has no public price API and EPIC-based URLs do not redirect, so each
+# instrument's canonical page URL is recorded here once. The scraper at
+# personal_project.clients.hl.prices fetches the URL, extracts the bid
+# price from the inline "<span class='bid price-divide'>...p</span>" block,
+# and caches the result on disk for 24 hours.
+#
+# To add an entry:
+#   1. Search the instrument on https://www.hl.co.uk
+#   2. Copy the canonical share/fund/ETF URL into `url:` below
+#   3. (Optional) Note the SEDOL in `sedol:` for reference
+#
+# Prices on HL are quoted in pence — the parser returns Decimal pence.
+
+instruments:
+  # ------- OEIC funds & gilts (not on yfinance, primary use case) -------
+  - code: BMF4SW8
+    name: FTF ClearBridge US Value Class W Acc
+    url: https://www.hl.co.uk/funds/fund-discounts,-prices--and--factsheets/search-results/f/ftf-clearbridge-us-value-class-w-accumulation
+  - code: BYX5P48
+    name: Fidelity MSCI World Index Class P Acc Hedged
+    # TODO: populate — could not guess the slug. Find via hl.co.uk fund search.
+    url: null
+  - code: BMBL1G8
+    name: Treasury 0.125% 31/01/2028 Gilt
+    url: https://www.hl.co.uk/shares/shares-search-results/t/treasury-0.125-31012028
+
+  # ------- Cross-check (yfinance already covers these) -------
+  # Populate lazily if you want HL marks alongside yfinance marks.
+  - code: VUAG
+    name: Vanguard S&P 500 UCITS ETF USD Acc (GBP)
+    url: null
+  - code: ASML
+    name: ASML Holding NV
+    url: null
+  - code: GOOGL
+    name: Alphabet Inc Class A
+    url: null
+  - code: CTY
+    name: City of London Investment Trust
+    url: null
+  - code: LGEN
+    name: Legal & General Group
+    url: null
+  - code: FCBR
+    name: First Trust Nasdaq Cybersecurity UCITS ETF
+    url: null
+  - code: FEQP
+    name: Fidelity Europe Quality Income UCITS ETF Hedged Acc
+    url: null
+  - code: IUKD
+    name: iShares FTSE UK Dividend UCITS ETF
+    url: null
+  - code: ISPE
+    name: iShares S&P 500 Equal Weight UCITS ETF Hedged Acc
+    url: null
+  - code: RTWP
+    name: L&G Russell 2000 US Small Cap UCITS ETF
+    url: null
+  - code: VHYG
+    name: Vanguard FTSE All World High Dividend Yield UCITS ETF
+    url: null
