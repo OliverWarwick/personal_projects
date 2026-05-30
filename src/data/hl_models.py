@@ -36,6 +36,7 @@ class HLTxnKind(StrEnum):
 
     BUY = "BUY"
     SELL = "SELL"
+    REDEMPTION = "REDEMPTION"
     INTEREST = "INTEREST"
     MANAGE_FEE = "MANAGE_FEE"
     DEPOSIT = "DEPOSIT"

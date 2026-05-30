@@ -100,6 +100,12 @@ def synthesize_flex_statement(account: HLAccount) -> ET.Element:
     for txn in account.transactions:
         if txn.kind in (HLTxnKind.BUY, HLTxnKind.SELL):
             continue
+        if txn.kind is HLTxnKind.REDEMPTION:
+            # Handled later as a synthetic SELL Trade so FIFO consumes the
+            # matured units; the cash credit comes from the Trade's
+            # ``proceeds`` so emitting a parallel CashTransaction would
+            # double-count.
+            continue
         # Map HL kinds to IBKR-style cash-transaction types so the dashboard's
         # ``Total Invested`` filter (which keys on "Deposits/Withdrawals")
         # picks up real cash contributions. Other kinds keep their HL label.
@@ -188,6 +194,37 @@ def synthesize_flex_statement(account: HLAccount) -> ET.Element:
             lot_qty[code] = prior_qty + txn_quantity
             lot_cost[code] = prior_cost - sold * avg
         _add(stmt, "Trade", **attrs)
+
+    # Bond/gilt redemptions: HL emits a single ``RDP CR`` cash row crediting
+    # the face value, with no S-prefix SELL to close the position. Emit a
+    # synthetic SELL that consumes whatever lot remains under that name so
+    # FIFO clears the units and the cash is delivered via ``proceeds``.
+    for txn in account.transactions:
+        if txn.kind is not HLTxnKind.REDEMPTION or txn.stock_name is None:
+            continue
+        code = _resolve_code(txn.stock_name, account) or _slug(txn.stock_name)
+        remaining = lot_qty.get(code, Decimal(0))
+        if remaining <= 0:
+            continue
+        avg = (lot_cost.get(code, Decimal(0)) / remaining) if remaining else Decimal(0)
+        unit_price = (txn.value_gbp / remaining) if remaining else Decimal(0)
+        _add(
+            stmt,
+            "Trade",
+            levelOfDetail="EXECUTION",
+            symbol=code,
+            currency="GBP",
+            tradeDate=txn.trade_date.strftime("%Y%m%d"),
+            quantity=str(-remaining),
+            tradePrice=str(unit_price),
+            proceeds=str(txn.value_gbp),
+            fxRateToBase="1",
+            openCloseIndicator="C",
+            origTradePrice=str(avg),
+            fifoPnlRealized=str((unit_price - avg) * remaining),
+        )
+        lot_qty[code] = Decimal(0)
+        lot_cost[code] = Decimal(0)
 
     # HL exports cover ~5 tax years, so any units bought (and cash deposited)
     # before that window are absent from the ledger. Rather than papering over

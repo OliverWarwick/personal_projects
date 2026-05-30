@@ -86,6 +86,12 @@ def _classify(reference: str, value_gbp: Decimal) -> HLTxnKind:  # noqa: PLR0911
         return HLTxnKind.DEPOSIT
     if upper == "TRANSFER":
         return HLTxnKind.TRANSFER
+    # Gilt/bond maturity: HL credits face value as cash and the position
+    # disappears from the holdings snapshot — there is no S-prefix sell row,
+    # so a naive FIFO replay never consumes the units and the matured holding
+    # sticks around as a phantom position worth its mark × qty.
+    if upper == "RDP CR":
+        return HLTxnKind.REDEMPTION
     # B-prefixed references are buys (cash out), S-prefixed are sells.
     if ref and ref[0] in {"B", "b"} and ref[1:].isdigit():
         return HLTxnKind.BUY
@@ -252,6 +258,14 @@ def parse_portfolio_summary(path: Path) -> list[HLTransaction]:
                 stock_name, qty, unit_cost = parsed
                 # Signed quantity: BUYs add units, SELLs remove them.
                 quantity = qty if kind is HLTxnKind.BUY else -qty
+        elif kind is HLTxnKind.REDEMPTION:
+            # "Treasury 0.125% 30/01/2026 Gilt Net Redemption Payment" →
+            # name="Treasury 0.125% 30/01/2026 Gilt". The cash value is the
+            # face value being paid out; the consumer needs the bond name so
+            # it can match against the surviving open lots.
+            stock_name = re.sub(
+                r"\s+Net\s+Redemption\s+Payment\s*$", "", description,
+            ).strip() or None
 
         transactions.append(
             HLTransaction(

@@ -87,8 +87,13 @@ IBKR_TO_YF: dict[str, tuple[str, str]] = {
     "ATS": ("ATS.VI", "EUR"),
     "E61": ("E61.F", "EUR"),
     "SOI": ("SOI.PA", "EUR"),
+    "HY9H": ("HY9H.F", "EUR"),  # Frankfurt-listed; no ADR
     "TER": ("TER", "USD"),
     "IBKR": ("IBKR", "USD"),
+    "AMKR": ("AMKR", "USD"),
+    "LITE": ("LITE", "USD"),
+    "MKSI": ("MKSI", "USD"),
+    "SMTC": ("SMTC", "USD"),
     "VUAG": ("VUAG.L", "GBP"),
     "IGUS": ("IGUS.L", "GBp"),
     "BRK B": ("BRK-B", "USD"),
@@ -612,7 +617,7 @@ def _build_timeline(
             else:
                 cash -= amt
                 realized += pnl
-        snapshots.append(_snapshot(d, stmt, cash, realized, deposited, _series, base_currency))
+        snapshots.append(_snapshot(d, stmt, cash, realized, deposited, _series, base_currency, is_final=(d == today)))
     first_active = events[0][0]
     result = [s for s in snapshots if s.date >= first_active]
     if cache is not None and cache_key and trades_hash is not None:
@@ -628,6 +633,8 @@ def _snapshot(
     deposited: Decimal,
     series_fn: Any,
     base_currency: str,
+    *,
+    is_final: bool = False,
 ) -> TimelineRow:
     """Compute deployed cost-basis and MTM unrealised P&L for date ``d``.
 
@@ -685,28 +692,53 @@ def _snapshot(
     qty: dict[str, Decimal] = {k: sum((lq for lq, _ in v), Decimal(0)) for k, v in lots.items()}
     cost: dict[str, Decimal] = {k: sum((lq * lc for lq, lc in v), Decimal(0)) for k, v in lots.items()}
 
+    # Per-key snapshot mark (markPrice × fxRateToBase) from OpenPosition.
+    # Used as a fallback when yfinance has no series for the symbol
+    # (typical for HL OEICs and gilts) so the headline portfolio value
+    # reflects the broker's bid quote instead of stale cost basis.
+    op_mark_base: dict[str, Decimal] = {}
+    for op in stmt.iter("OpenPosition"):
+        if op.get("levelOfDetail") not in {"SUMMARY", None}:
+            continue
+        op_sym = op.get("symbol") or ""
+        if not op_sym or "." in op_sym:
+            continue
+        op_key = op.get("conid") or op_sym
+        mark = _to_dec(op.get("markPrice"))
+        op_fx = _to_dec(op.get("fxRateToBase")) or Decimal(1)
+        if mark > 0:
+            op_mark_base[op_key] = mark * op_fx
+
     deployed = sum(cost.values(), Decimal(0))
     mtm = Decimal(0)
     for key, q in qty.items():
         if q == 0:
             continue
         sym = key_to_sym.get(key, key)
+        # On the final-day snapshot, prefer the broker's authoritative
+        # markPrice over yfinance close (which can drift from HL/AJB bids).
+        if is_final and key in op_mark_base:
+            mtm += op_mark_base[key] * q
+            continue
         yf_sym, ccy = IBKR_TO_YF.get(sym, (sym, base_currency))
         try:
             s = series_fn(yf_sym, ccy)
         except MarketDataError:
             if yf_sym not in _WARNED_MISSING:
-                logger.warning("no price data for %s; falling back to cost basis", yf_sym)
+                logger.warning("no price data for %s; using OpenPosition.markPrice", yf_sym)
                 _WARNED_MISSING.add(yf_sym)
-            mtm += cost.get(key, Decimal(0))
+            fallback_mark = op_mark_base.get(key)
+            mtm += fallback_mark * q if fallback_mark is not None else cost.get(key, Decimal(0))
             continue
         except Exception:
             logger.exception("yfinance fetch failed for %s", yf_sym)
-            mtm += cost.get(key, Decimal(0))
+            fallback_mark = op_mark_base.get(key)
+            mtm += fallback_mark * q if fallback_mark is not None else cost.get(key, Decimal(0))
             continue
         avail = s[s.index <= pd.Timestamp(d)]
         if avail.empty:
-            mtm += cost.get(key, Decimal(0))
+            fallback_mark = op_mark_base.get(key)
+            mtm += fallback_mark * q if fallback_mark is not None else cost.get(key, Decimal(0))
             continue
         px = Decimal(str(float(avail.iloc[-1])))
         mtm += px * q
