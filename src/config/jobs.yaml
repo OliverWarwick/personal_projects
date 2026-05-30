@@ -1,0 +1,12 @@
+# Jobs configuration
+# Lists all user configs to be included in poll and notify runs.
+# Add a new entry here for each additional user config.
+
+configs:
+  - src/config/rightmove_ow.yaml
+
+# Telegram notification settings.
+# Set channel_id to your channel username (@mychannel) or numeric chat ID (-100xxxx).
+# Leave channel_id empty or remove this section to disable Telegram notifications.
+telegram:
+  channel_id: ""  # fill in once your channel is created

@@ -1,0 +1,63 @@
+# Rightmove search config for OW
+#
+# Region aliases map a friendly name to a Rightmove location identifier.
+# To find the identifier for a location, search on rightmove.co.uk and
+# copy the `locationIdentifier` query parameter from the URL.
+#
+# ---
+# Full list of supported filters per search:
+#
+#   channel:          RENT | BUY
+#   min_price / max_price
+#   min_bedrooms / max_bedrooms
+#   property_types:   flat | detached | semi-detached | terraced |
+#                     bungalow | mobile-home | park-home | shared-accommodation
+#   min_area_size / max_area_size  (in area_size_unit: sqft | sqm)
+#   sort_type:        1 (lowest price) | 2 (highest price) | 6 (most recent)
+#   radius:           miles (0.5, 1.0, 3.0, 5.0, 10.0, 15.0, 20.0, 40.0)
+#   added_to_site:    last24Hours | last3Days | last7Days | last14Days | lastMonth
+#
+#   -- RENT only --
+#   furnish_types:    furnished | partFurnished | unfurnished
+#   let_type:         longTerm | shortTerm
+#
+#   -- Feature flags --
+#   must_have:        garden | parking | newHome | retirement
+#   dont_show:        newHome | retirement | sharedOwnership | auction
+#
+#   -- BUY only --
+#   include_sstc:     true | false
+#   new_homes_only:   true | false
+
+regions:
+  wandsworth: "REGION^96855"
+  islington: "REGION^87498"
+
+searches:
+  - name: "Wandsworth 2-bed rental"
+    region: wandsworth
+    channel: RENT
+    min_price: 1500
+    max_price: 3000
+    max_bedrooms: 2
+    sort_type: 6
+    property_types:
+      - flat
+      - terraced
+    furnish_types:
+      - furnished
+      - partFurnished
+    dont_show:
+      - retirement
+      - sharedOwnership
+
+  - name: "Islington 2-bed rental"
+    region: islington
+    channel: RENT
+    min_price: 1500
+    max_price: 3000
+    max_bedrooms: 2
+    sort_type: 6
+    dont_show:
+      - retirement
+      - sharedOwnership

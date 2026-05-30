@@ -1,54 +1,22 @@
-# Claude Code Instructions
+# Personal Projects
 
-## Code Style
+This is a personal projects repo — a collection of independent scripts and small apps.
 
-- All public functions, methods, classes, and modules **must** have a docstring
-- Docstrings must be **thorough, clean, and informative** — not just one-word placeholders
-  - Classes: explain what the class represents, its role in the system, and key behaviour
-  - Methods/functions: explain what it does, include `Args:`, `Returns:`, and `Raises:` sections where applicable
-  - Modules: describe the purpose of the file and what it contains
-  - Always write docstrings so someone new to the codebase can understand the code without reading the implementation
-- Use imperative mood: "Return the trade." not "Returns the trade."
-- One-line docstrings for truly trivial functions; multi-line with summary + details for everything else
-- Follow the Google docstring convention (D211, D212 selected via ruff)
+## Code style
 
-## Linting
-
-- Ruff enforces a comprehensive rule set — run `uv run ruff check .` before committing
-- Pyright in strict mode — run `uv run pyright src tests` before committing
-- All violations must be fixed, not ignored (except D203/D213 incompatible pair)
-- Inline `# noqa:` is acceptable only when tools genuinely conflict (e.g., ARG002 vs pyright protocol parameter names, PLW0108 for typed default_factory lambdas)
+- Clean, readable, and maintainable code
+- Use `ruff` for linting and formatting (`uv run ruff check` / `uv run ruff format`)
+- Type checking with `pyright` (`uv run pyright`)
+- Always use absolute imports — never relative imports (no `from .foo import bar`)
 
 ## Testing
 
-- TDD workflow: Red-Green-Refactor
-- Minimum 80% coverage enforced by pytest-cov
-- Test classes and methods also require docstrings
-- Use named constants instead of magic values (PLR2004)
-- Run `uv run pytest` before committing
+No unit tests. Validate functionality end-to-end by running the scripts directly.
 
-## Commits
+## Environment
 
-- Use conventional commits (enforced by commitizen): `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `ci:`, `chore:`
-- All changes go via PR from a feature branch (main is protected)
-- Pre-commit hooks must pass: ruff, ruff-format, pyright, pip-audit, actionlint
+Managed with `uv`. To install dependencies:
 
-## Application Structure
-
-- Each app lives under `src/personal_project/apps/<app_name>/`
-- The console-script entry point for an app must be named **`run.py`** (not `cli.py`)
-  - Register it in `pyproject.toml` as `"personal_project.apps.<app_name>.run:main"`
-  - Keep argument parsing, async runners, and output formatting in `run.py`
-- Config for an app belongs in `src/personal_project/config/<app_name>.yaml`
-- Use `config.py` inside the app package to load and expose config values
-
-## Permissions
-
-- Always allow Bash commands that contain a quoted newline followed by a `#`-prefixed line — these are multi-line Python `-c` scripts and do not need permission prompts
-
-## Dependencies
-
-- Package manager: uv
-- Add production deps to `[project.dependencies]`
-- Add dev deps to `[project.optional-dependencies.dev]` or `[dependency-groups.dev]`
-- Run `uv sync --all-extras` after modifying dependencies
+```bash
+uv sync
+```

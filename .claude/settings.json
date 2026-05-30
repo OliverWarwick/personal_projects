@@ -1,33 +1,26 @@
 {
   "project": {
-    "name": "personal-project",
-    "description": "Personal project",
+    "name": "personal-projects",
+    "description": "Personal projects",
     "language": "python",
     "pythonVersion": "3.14"
   },
   "tooling": {
-    "testFramework": "pytest",
     "linter": "ruff",
     "formatter": "ruff",
     "typeChecker": "pyright",
-    "packageManager": "uv",
-    "minCoverage": 80,
-    "tdd": true
+    "packageManager": "uv"
   },
   "commands": {
-    "test": "uv run pytest",
-    "test:verbose": "uv run pytest -v",
-    "test:coverage": "uv run pytest --cov=src --cov-report=html",
     "lint": "uv run ruff check .",
     "lint:fix": "uv run ruff check --fix .",
     "format": "uv run ruff format .",
     "format:check": "uv run ruff format --check .",
-    "typecheck": "uv run pyright src tests",
-    "check:all": "uv run ruff check . && uv run ruff format --check . && uv run pyright src tests",
-    "pre-commit": "uv run pre-commit run --all-files",
-    "install": "uv sync --all-extras",
+    "typecheck": "uv run pyright",
+    "check:all": "uv run ruff check . && uv run ruff format --check . && uv run pyright",
+    "install": "uv sync --extra dev",
     "update": "uv sync --upgrade",
-    "clean": "rm -rf .pytest_cache .ruff_cache htmlcov .coverage"
+    "clean": "rm -rf .ruff_cache"
   },
   "permissions": {
     "allow": [
@@ -45,7 +38,6 @@
       "Bash(export PATH=*)",
       "Bash(uv add:*)",
       "Bash(uv sync:*)",
-      "Bash(uv run pytest:*)",
       "Bash(uv run ruff:*)",
       "Bash(uv run pyright:*)",
       "Bash(ls:*)",
