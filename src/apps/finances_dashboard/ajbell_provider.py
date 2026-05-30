@@ -135,10 +135,19 @@ def synthesize_flex_statement(account: AJBellAccount) -> ET.Element:
             attrs["origTradePrice"] = str(avg)
         _add(stmt, "Trade", **attrs)
 
-    # AJ Bell ISA / Dealing are non-margin; plug any negative-cash trace from
-    # missing early deposits with a synthetic ``DEP`` row at timeline start.
-    from src.apps.finances_dashboard.hl_provider import _plug_negative_cash  # noqa: PLC0415
-    _plug_negative_cash(stmt)
+    # AJ Bell ISA / Dealing are non-margin; reconcile the synthesised cash
+    # trace to the broker snapshot's cash balance and plug any negative dip
+    # from missing early deposits.
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+    from src.apps.finances_dashboard.hl_provider import _inject_opening_balances  # noqa: PLC0415
+    _inject_opening_balances(
+        stmt,
+        snapshot_holdings=[
+            (_symbol_for(h.investment, h.ticker), h.quantity, h.cost_gbp)
+            for h in account.portfolio.holdings
+        ],
+        target_final_cash=_Decimal(getattr(account.portfolio, "cash_gbp", 0) or 0),
+    )
 
     return stmt
 

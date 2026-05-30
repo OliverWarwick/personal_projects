@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import date, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -25,9 +25,14 @@ from src.clients.hl.reconcile import normalise_name
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9]+")
 
+# Weekday index that marks the start of the weekend (Saturday = 5). The
+# dashboard timeline iterates pandas business days only, so events dated
+# on Sat/Sun are silently dropped.
+_SATURDAY_WEEKDAY = 5
+
 if TYPE_CHECKING:
     from src.clients.hl.loader import HLAccount
-    from src.data.hl_models import HLAccountKind
+    from src.data.hl_models import HLAccountKind, HLHolding  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +100,13 @@ def synthesize_flex_statement(account: HLAccount) -> ET.Element:
     for txn in account.transactions:
         if txn.kind in (HLTxnKind.BUY, HLTxnKind.SELL):
             continue
+        # Map HL kinds to IBKR-style cash-transaction types so the dashboard's
+        # ``Total Invested`` filter (which keys on "Deposits/Withdrawals")
+        # picks up real cash contributions. Other kinds keep their HL label.
+        type_attr = (
+            "Deposits/Withdrawals" if txn.kind is HLTxnKind.DEPOSIT
+            else txn.kind.value
+        )
         _add(
             stmt,
             "CashTransaction",
@@ -103,7 +115,7 @@ def synthesize_flex_statement(account: HLAccount) -> ET.Element:
             settleDate=txn.settle_date.strftime("%Y%m%d"),
             amount=str(txn.value_gbp),
             fxRateToBase="1",
-            type=txn.kind.value,
+            type=type_attr,
             currency="GBP",
         )
 
@@ -177,77 +189,195 @@ def synthesize_flex_statement(account: HLAccount) -> ET.Element:
             lot_cost[code] = prior_cost - sold * avg
         _add(stmt, "Trade", **attrs)
 
-    # HL accounts (ISA, SIPP, Fund & Share) are non-margin — cash cannot go
-    # negative. If the parsed ledger is missing early deposits (HL's CSV export
-    # often only covers a finite window) the synthesised cash trace can dip
-    # below zero. Compute the minimum running balance across all emitted
-    # CashTransaction + Trade rows and, if it's negative, prepend a synthetic
-    # "DEP" deposit equal to that shortfall dated the day before the earliest
-    # event so the timeline never shows phantom leverage.
-    _plug_negative_cash(stmt)
+    # HL exports cover ~5 tax years, so any units bought (and cash deposited)
+    # before that window are absent from the ledger. Rather than papering over
+    # this with mid-timeline plug rows, surface the gap as one synthetic
+    # opening row dated before the first ledger event: opening units per code
+    # to match the snapshot, plus an opening cash deposit so the final balance
+    # reconciles to the CSV.
+    _inject_opening_balances(
+        stmt,
+        snapshot_holdings=[(h.code, h.units, h.cost_gbp) for h in account.summary.holdings],
+        target_final_cash=Decimal(account.summary.cash_gbp or 0),
+    )
 
     return stmt
 
 
-def _plug_negative_cash(stmt: ET.Element) -> None:
-    """Prepend a synthetic deposit so the running cash balance never dips below zero.
+def _inject_opening_balances(
+    stmt: ET.Element,
+    *,
+    snapshot_holdings: list[tuple[str, Decimal, Decimal]],
+    target_final_cash: Decimal,
+) -> None:
+    """Inject one synthetic opening row before the earliest ledger event.
 
-    HL/SIPP/ISA wrappers can't borrow, so a negative cash trace always means
-    the input ledger is missing an early deposit. This walks the synthesised
-    CashTransaction (signed ``amount``) and Trade (signed ``proceeds``) rows
-    in date order, tracks the minimum running balance, and — if it's negative
-    — emits a single ``DEP`` ``CashTransaction`` for ``|min|`` dated one day
-    before the earliest event.
+    HL exports only carry ~5 tax years of transactions, so units bought
+    before that window have no BUY row and historical deposits are missing.
+    Rather than papering over the gap with mid-timeline plugs (which create
+    spurious cliffs), we emit a single opening day, dated one business day
+    before the first real event:
+
+    * For each snapshot holding where ``snapshot.units > replayed_units``,
+      emit a synthetic opening BUY for the missing quantity, priced at the
+      remaining-cost average so the snapshot cost basis lines up. The buy
+      is paired with an equal-amount ``Opening Balance`` CashTransaction so
+      it doesn't artificially drain opening cash.
+    * Finally, emit one ``Opening Balance`` CashTransaction sized so the
+      closing cash balance equals ``target_final_cash`` from the CSV.
+
+    The result is a coherent opening state followed by purely real events —
+    no mid-timeline plug rows and no final-day anchor cliff.
+
+    Args:
+        stmt: The synthesised ``FlexStatement`` element. Mutated in place.
+        snapshot_holdings: One ``(code, units, cost_gbp)`` tuple per current
+            holding from the broker snapshot.
+        target_final_cash: Authoritative current cash from the broker CSV.
+
     """
-    events: list[tuple[date, Decimal]] = []
+    import pandas as pd  # noqa: PLC0415 — keep heavy import local to this helper
+
+    # Replay existing Trade rows to recover net units and weighted-average
+    # cost per code. Doing this from the stmt (rather than asking the caller
+    # to pass it in) means the same helper works for HL and AJ Bell.
+    replayed_qty: dict[str, Decimal] = {}
+    replayed_cost: dict[str, Decimal] = {}
+    trade_rows = sorted(
+        (t for t in stmt if t.tag == "Trade" and t.get("tradeDate")),
+        key=lambda t: t.get("tradeDate") or "",
+    )
+    for t in trade_rows:
+        sym = t.get("symbol") or ""
+        q = _to_dec_local(t.get("quantity"))
+        px = _to_dec_local(t.get("tradePrice"))
+        prior_q = replayed_qty.get(sym, Decimal(0))
+        prior_c = replayed_cost.get(sym, Decimal(0))
+        if q > 0:
+            replayed_qty[sym] = prior_q + q
+            replayed_cost[sym] = prior_c + q * px
+        else:
+            sold = -q
+            avg = (prior_c / prior_q) if prior_q else Decimal(0)
+            replayed_qty[sym] = prior_q + q
+            replayed_cost[sym] = prior_c - sold * avg
+
+    # Find earliest *business-day* event. The dashboard timeline iterates
+    # pandas bdate_range and silently drops Sat/Sun rows, so we must mirror
+    # that filter — otherwise weekend events appear in our cash reconcile
+    # arithmetic but never in the replay, and opening_cash is off by their
+    # sum (mostly fractional interest, but it accumulates).
     earliest: date | None = None
     for child in stmt:
-        d_str: str | None = None
-        amount: Decimal = Decimal(0)
+        d_str: str | None
         if child.tag == "CashTransaction":
             d_str = child.get("dateTime") or child.get("settleDate")
-            amount = _to_dec_local(child.get("amount"))
         elif child.tag == "Trade":
             d_str = child.get("tradeDate")
-            amount = _to_dec_local(child.get("proceeds"))
         else:
             continue
         if not d_str:
             continue
         d = date(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:8]))
-        events.append((d, amount))
-        earliest = d if earliest is None or d < earliest else earliest
-    if not events or earliest is None:
-        return
-    events.sort(key=lambda e: e[0])
-    running = Decimal(0)
-    min_running = Decimal(0)
-    for _d, amt in events:
-        running += amt
-        if running < min_running:
-            min_running = running
-    if min_running >= 0:
-        return
-    # Place the plug on the first business day on or after ``earliest`` —
-    # the dashboard timeline iterates pandas business days, so a Sat/Sun
-    # plug-date silently gets skipped. ``run.py::_events`` sorts cash events
-    # before trades on the same date, so a same-day plug still funds any buy.
-    import pandas as pd  # noqa: PLC0415 — keep heavy import local to this helper
-    plug_dt = pd.bdate_range(start=earliest, periods=1)[0].date()
-    plug_date = plug_dt.strftime("%Y%m%d")
-    plug = ET.Element(
-        "CashTransaction",
-        {
-            "levelOfDetail": "DETAIL",
-            "dateTime": plug_date,
-            "settleDate": plug_date,
-            "amount": str(-min_running),
-            "fxRateToBase": "1",
-            "type": "DEP",
-            "currency": "GBP",
-        },
-    )
-    stmt.insert(0, plug)
+        if pd.Timestamp(d).weekday() >= _SATURDAY_WEEKDAY:
+            continue
+        if earliest is None or d < earliest:
+            earliest = d
+
+    # Opening date: one business day before the earliest real event. If there
+    # are no events yet, anchor to today so the snapshot is still represented.
+    if earliest is None:
+        opening_d = datetime.now(UTC).date()
+    else:
+        opening_d = pd.bdate_range(end=earliest, periods=2)[0].date()
+        if opening_d >= earliest:
+            opening_d = pd.bdate_range(end=earliest - pd.Timedelta(days=1), periods=1)[0].date()
+    opening_date = opening_d.strftime("%Y%m%d")
+
+    opening_rows: list[ET.Element] = []
+    opening_cost_credit = Decimal(0)
+
+    # Synthetic opening BUYs for any holdings under-represented by the replay.
+    tol = Decimal("0.0001")
+    for code, snap_units, snap_cost in snapshot_holdings:
+        replayed_units = replayed_qty.get(code, Decimal(0))
+        delta_units = snap_units - replayed_units
+        if delta_units <= tol:
+            continue
+        replayed_cost_for_code = replayed_cost.get(code, Decimal(0))
+        # Remaining cost = snapshot cost - cost of units bought in-window
+        # that are still held. Approximate with the in-window average cost.
+        in_window_avg = (
+            replayed_cost_for_code / replayed_units if replayed_units > 0 else Decimal(0)
+        )
+        in_window_still_held_cost = min(replayed_units, snap_units) * in_window_avg
+        opening_cost = snap_cost - in_window_still_held_cost
+        if opening_cost <= 0:
+            opening_cost = (snap_cost / snap_units) * delta_units if snap_units else Decimal(0)
+        opening_price = opening_cost / delta_units if delta_units else Decimal(0)
+        proceeds = -delta_units * opening_price
+        opening_rows.append(ET.Element(
+            "Trade",
+            {
+                "levelOfDetail": "EXECUTION",
+                "symbol": code,
+                "currency": "GBP",
+                "tradeDate": opening_date,
+                "quantity": str(delta_units),
+                "tradePrice": str(opening_price),
+                "proceeds": str(proceeds),
+                "fxRateToBase": "1",
+                "openCloseIndicator": "O",
+            },
+        ))
+        opening_cost_credit += delta_units * opening_price
+
+    # Compute net cash impact across every business-day-dated row plus the
+    # synthetic buys above, then size one opening deposit to land on
+    # target_final_cash. Weekend-dated rows are excluded to match the
+    # business-day replay in the dashboard timeline.
+    net_cash = Decimal(0)
+    for child in stmt:
+        if child.tag == "CashTransaction":
+            d_str = child.get("dateTime") or child.get("settleDate")
+            amt = _to_dec_local(child.get("amount"))
+        elif child.tag == "Trade":
+            d_str = child.get("tradeDate")
+            amt = _to_dec_local(child.get("proceeds"))
+        else:
+            continue
+        if not d_str:
+            continue
+        ev_d = date(int(d_str[:4]), int(d_str[4:6]), int(d_str[6:8]))
+        if pd.Timestamp(ev_d).weekday() >= _SATURDAY_WEEKDAY:
+            continue
+        net_cash += amt
+    # Synthetic opening buys deduct cash via their proceeds; credit it back
+    # so the opening trades don't appear to consume in-window cash.
+    opening_cash = target_final_cash - net_cash + opening_cost_credit
+
+    if opening_cash != 0:
+        # Label as Deposits/Withdrawals so the dashboard's "Total Invested"
+        # widget counts pre-window money toward invested capital. The amount
+        # = (cash needed today to reconcile) + (cost of pre-window holdings)
+        # which is exactly the cash that was put in before the export window.
+        opening_rows.append(ET.Element(
+            "CashTransaction",
+            {
+                "levelOfDetail": "DETAIL",
+                "dateTime": opening_date,
+                "settleDate": opening_date,
+                "amount": str(opening_cash),
+                "fxRateToBase": "1",
+                "type": "Deposits/Withdrawals",
+                "currency": "GBP",
+            },
+        ))
+
+    # Insert opening rows at the front so they precede every real event in
+    # the timeline replay.
+    for row in reversed(opening_rows):
+        stmt.insert(0, row)
 
 
 def _to_dec_local(v: str | None) -> Decimal:

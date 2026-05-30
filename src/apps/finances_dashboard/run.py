@@ -102,6 +102,12 @@ IBKR_TO_YF: dict[str, tuple[str, str]] = {
     "VHYG": ("VHYG.L", "GBP"),
     "ISPE": ("ISPE.L", "GBP"),
     "LGEN": ("LGEN.L", "GBp"),
+    # HL holds ASML as the Amsterdam-listed line (ISIN NL0010273215). The
+    # bare ``ASML`` ticker on Yahoo is the US ADR quoted in USD; without an
+    # explicit mapping the dashboard treats the USD price as GBP and
+    # overstates the position by ~30%. Route to ``ASML.AS`` in EUR so the
+    # FX layer converts correctly. (``ASML.L`` does not exist on yfinance.)
+    "ASML": ("ASML.AS", "EUR"),
     # HL/AJ Bell description-style symbols — mapped from the truncated
     # instrument description string emitted by the synth providers.
     "AMAZON-COM-INC-COM-STK-U": ("AMZN", "USD"),
@@ -381,9 +387,24 @@ def _open_positions(stmt: ET.Element, account_id: str = "") -> list[PositionRow]
         if not val and qty and mark:
             val = qty * mark
         fx = _to_dec(p.get("fxRateToBase")) or Decimal(1)
+        sym = p.get("symbol") or ""
+        # Fall back to IBKR-supplied lot open date / holding-period date when
+        # the Trade ledger doesn't contain a BUY for this symbol — common for
+        # long-held positions whose only purchase predates the Flex window.
+        first_p = first_buy.get(sym)
+        if first_p is None:
+            for attr in ("openDateTime", "holdingPeriodDateForGains"):
+                raw = (p.get(attr) or "")[:8]
+                if raw and raw.isdigit() and len(raw) == 8:
+                    try:
+                        first_p = datetime.strptime(raw, "%Y%m%d").replace(tzinfo=UTC).date()
+                    except ValueError:
+                        first_p = None
+                    if first_p is not None:
+                        break
         rows.append(
             PositionRow(
-                ticker=p.get("symbol") or "",
+                ticker=sym,
                 exchange=p.get("listingExchange") or "",
                 currency=p.get("currency") or "",
                 quantity=qty,
@@ -393,8 +414,8 @@ def _open_positions(stmt: ET.Element, account_id: str = "") -> list[PositionRow]
                 fx_rate=fx,
                 value_base=val * fx,
                 unrealized_base=_to_dec(p.get("fifoPnlUnrealized")) * fx,
-                last_purchase=last_buy.get(p.get("symbol") or ""),
-                first_purchase=first_buy.get(p.get("symbol") or ""),
+                last_purchase=last_buy.get(sym) or first_p,
+                first_purchase=first_p,
                 isin=p.get("isin") or "",
                 description=p.get("description") or "",
                 conid=p.get("conid") or "",
@@ -490,7 +511,6 @@ def _events(
         d = datetime.strptime(d_str, "%Y%m%d").replace(tzinfo=UTC).date()
         amt = _to_dec(c.get("amount")) * (_to_dec(c.get("fxRateToBase")) or Decimal(1))
         out.append((d, "cash", amt, c.get("type") or "", Decimal(0)))
-    base_up = base_currency.upper()
     for t in stmt.iter("Trade"):
         if t.get("levelOfDetail") != "EXECUTION":
             continue
@@ -499,19 +519,12 @@ def _events(
         if not d_str:
             continue
         d = datetime.strptime(d_str, "%Y%m%d").replace(tzinfo=UTC).date()
+        # Skip forex rows: they're zero-sum in base currency (one ccy pot
+        # shrinks, another grows). The base-currency impact of a foreign
+        # stock buy is captured by ``-proc * fxRateToBase`` on the stock
+        # trade itself, which represents the value of that USD/EUR cash
+        # outflow translated back to base.
         if "." in sym:
-            # Forex pair: 'LHS.RHS' where quantity is LHS, proceeds is RHS.
-            # When LHS or RHS matches base_currency, the base-currency leg is
-            # a real cash event we need to include.
-            lhs, _, rhs = sym.partition(".")
-            qty = _to_dec(t.get("quantity"))
-            proc = _to_dec(t.get("proceeds"))
-            if lhs.upper() == base_up:
-                # Selling base for the other side: qty is the signed base flow.
-                out.append((d, "cash", qty, f"FX {sym}", Decimal(0)))
-            elif rhs.upper() == base_up:
-                # Buying base with the other side: proceeds is the signed base flow.
-                out.append((d, "cash", proc, f"FX {sym}", Decimal(0)))
             continue
         proc = _to_dec(t.get("proceeds"))
         fx = _to_dec(t.get("fxRateToBase")) or Decimal(1)
@@ -591,7 +604,11 @@ def _build_timeline(
                 continue
             if kind == "cash":
                 cash += amt
-                deposited += amt
+                # "Total Invested" = real money in/out only. Skip forex legs
+                # (internal GBP↔USD conversions) and broker dividends/fees/
+                # interest — they're not deposits.
+                if _label == "Deposits/Withdrawals":
+                    deposited += amt
             else:
                 cash -= amt
                 realized += pnl
@@ -615,15 +632,19 @@ def _snapshot(
     """Compute deployed cost-basis and MTM unrealised P&L for date ``d``.
 
     Replays the statement's trades up to and including ``d`` to derive
-    open quantities and cost bases per ticker, then marks each holding
-    using the closest ``series_fn`` close on or before ``d``.
+    open quantities and cost bases per ticker (FIFO lot-matching), then
+    marks each holding using the closest ``series_fn`` close on or before
+    ``d``.
     """
-    # Average-cost replay: on a SELL we must reduce ``cost`` by
-    # ``sold * avg``, not by the sale proceeds. The naive ``cost += -proc*fx``
-    # form treats a profitable partial sell as if it removed cost at the
-    # sale price, leaving ``deployed`` inflated by the realised gain (and
-    # ``unrealized = MTM − deployed`` correspondingly too low).
-    rows: list[tuple[date, str, Decimal, Decimal, Decimal]] = []
+    # FIFO replay: each BUY pushes a (qty, unit_cost_base) lot, each SELL
+    # consumes lots from the front. This matches how UK brokers report
+    # cost basis (and how HMRC computes CGT), so the replay's residual
+    # cost basis agrees with the broker's authoritative figure — no
+    # final-day anchor needed.
+    # Group by IBKR ``conid`` (stable contract id) so trades booked under
+    # different symbol codes for the same security fold into one position.
+    # Synthetic statements (HL/AJB) have no conid, so fall back to the symbol.
+    rows: list[tuple[date, str, str, Decimal, Decimal, Decimal]] = []
     for t in stmt.iter("Trade"):
         if t.get("levelOfDetail") != "EXECUTION":
             continue
@@ -639,61 +660,37 @@ def _snapshot(
         q = _to_dec(t.get("quantity"))
         proc = _to_dec(t.get("proceeds"))
         fx = _to_dec(t.get("fxRateToBase")) or Decimal(1)
-        rows.append((td, sym, q, proc, fx))
+        key = t.get("conid") or sym
+        rows.append((td, key, sym, q, proc, fx))
     rows.sort(key=lambda r: r[0])
-    qty: dict[str, Decimal] = {}
-    cost: dict[str, Decimal] = {}
-    for _td, sym, q, proc, fx in rows:
-        prior_q = qty.get(sym, Decimal(0))
-        prior_c = cost.get(sym, Decimal(0))
-        if q >= 0:
-            qty[sym] = prior_q + q
-            cost[sym] = prior_c + (-proc * fx)
-        else:
-            sold = -q
-            avg = (prior_c / prior_q) if prior_q > 0 else Decimal(0)
-            qty[sym] = prior_q + q
-            cost[sym] = prior_c - sold * avg
-
-    # For the *latest* snapshot, anchor cost/qty to the ``OpenPosition`` rows
-    # (the broker's authoritative current holdings) instead of the replay.
-    # Without this, accounts whose trade-history window is shorter than their
-    # actual holding period (HL CSV exports often miss old buys for positions
-    # that have since been partly sold) accumulate phantom cost basis, which
-    # inflates ``deployed`` and depresses ``unrealized`` on the widget.
-    # Historical dates keep the replay so the timeline chart still moves.
-    # IBKR Flex emits OpenPosition rows at both SUMMARY *and* per-LOT detail
-    # for the same symbol; without filtering we double-count cost basis on
-    # IBKR accounts. Prefer SUMMARY (one row per symbol) when present, else
-    # fall back to LOT so HL/AJB synth (SUMMARY-only) still works.
-    raw_ops = [
-        op for op in stmt.iter("OpenPosition")
-        if (op.get("symbol") or "") and "." not in (op.get("symbol") or "")
-    ]
-    summary_ops = [op for op in raw_ops if op.get("levelOfDetail") == "SUMMARY"]
-    open_positions = summary_ops if summary_ops else raw_ops
-    if open_positions:
-        latest_trade_date = max((r[0] for r in rows), default=d)
-        if d >= latest_trade_date:
-            snap_qty: dict[str, Decimal] = {}
-            snap_cost: dict[str, Decimal] = {}
-            for op in open_positions:
-                sym = op.get("symbol") or ""
-                op_qty = _to_dec(op.get("position"))
-                op_cost_px = _to_dec(op.get("costBasisPrice"))
-                op_fx = _to_dec(op.get("fxRateToBase")) or Decimal(1)
-                snap_qty[sym] = op_qty
-                snap_cost[sym] = op_qty * op_cost_px * op_fx
-            # Drop symbols missing from OpenPosition — they're closed (or the
-            # broker is no longer reporting them) so they contribute 0 to
-            # deployed. Realised P&L is tracked separately and unaffected.
-            qty, cost = snap_qty, snap_cost
+    lots: dict[str, list[tuple[Decimal, Decimal]]] = {}  # key → [(qty, unit_cost_base)]
+    key_to_sym: dict[str, str] = {}
+    for _td, key, sym, q, proc, fx in rows:
+        key_to_sym[key] = sym  # latest symbol wins (rows sorted by date)
+        if q > 0:
+            unit_cost = (-proc * fx) / q
+            lots.setdefault(key, []).append((q, unit_cost))
+        elif q < 0:
+            remaining = -q
+            klots = lots.get(key, [])
+            while remaining > 0 and klots:
+                lot_q, lot_c = klots[0]
+                take = min(lot_q, remaining)
+                remaining -= take
+                lot_q -= take
+                if lot_q == 0:
+                    klots.pop(0)
+                else:
+                    klots[0] = (lot_q, lot_c)
+    qty: dict[str, Decimal] = {k: sum((lq for lq, _ in v), Decimal(0)) for k, v in lots.items()}
+    cost: dict[str, Decimal] = {k: sum((lq * lc for lq, lc in v), Decimal(0)) for k, v in lots.items()}
 
     deployed = sum(cost.values(), Decimal(0))
     mtm = Decimal(0)
-    for sym, q in qty.items():
+    for key, q in qty.items():
         if q == 0:
             continue
+        sym = key_to_sym.get(key, key)
         yf_sym, ccy = IBKR_TO_YF.get(sym, (sym, base_currency))
         try:
             s = series_fn(yf_sym, ccy)
@@ -701,15 +698,15 @@ def _snapshot(
             if yf_sym not in _WARNED_MISSING:
                 logger.warning("no price data for %s; falling back to cost basis", yf_sym)
                 _WARNED_MISSING.add(yf_sym)
-            mtm += cost.get(sym, Decimal(0))
+            mtm += cost.get(key, Decimal(0))
             continue
         except Exception:
             logger.exception("yfinance fetch failed for %s", yf_sym)
-            mtm += cost.get(sym, Decimal(0))
+            mtm += cost.get(key, Decimal(0))
             continue
         avail = s[s.index <= pd.Timestamp(d)]
         if avail.empty:
-            mtm += cost.get(sym, Decimal(0))
+            mtm += cost.get(key, Decimal(0))
             continue
         px = Decimal(str(float(avail.iloc[-1])))
         mtm += px * q
@@ -866,7 +863,9 @@ def _summarise(
             var_99=None,
         )
     last = timeline[-1]
-    portfolio_value = last.cash + last.deployed + last.unrealized + last.realized
+    # Closed-loop accounting: realised PnL is already reflected in ``cash``
+    # (sells credit the full proceeds), so don't add it again.
+    portfolio_value = last.cash + last.deployed + last.unrealized
     first_date = (
         min(d for d, _ in deposit_events) if deposit_events else timeline[0].date
     )
@@ -914,7 +913,7 @@ def _summarise(
     excess_returns: list[float] = []
     for i in range(1, len(timeline)):
         prev_row, cur_row = timeline[i - 1], timeline[i]
-        sod = prev_row.cash + prev_row.deployed + prev_row.unrealized + prev_row.realized
+        sod = prev_row.cash + prev_row.deployed + prev_row.unrealized
         if sod > 0:
             delta_pnl = (cur_row.unrealized + cur_row.realized) - (
                 prev_row.unrealized + prev_row.realized
@@ -1090,11 +1089,13 @@ def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> F
         timeline = _build_timeline(
             stmt,
             base,
-            max(trailing_days, 365),
+            max(trailing_days, 1095),
             cache_key=None if is_agg else account_id,
         )
         deposit_events = [
-            (d, amt) for d, kind, amt, _lbl, _pnl in _events(stmt, base) if kind == "cash"
+            (d, amt)
+            for d, kind, amt, lbl, _pnl in _events(stmt, base)
+            if kind == "cash" and lbl == "Deposits/Withdrawals"
         ]
         rf_returns = (
             _risk_free_daily_returns(timeline[0].date, timeline[-1].date)
@@ -1113,7 +1114,7 @@ def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> F
         timeline = _build_timeline(
             stmt,
             base,
-            max(trailing_days, 365),
+            max(trailing_days, 1095),
             cache_key=None if _is_agg else account_id,
         )
         labels = [t.date.isoformat() for t in timeline]
@@ -1506,7 +1507,7 @@ def _render_html(
     for i in range(1, len(timeline)):
         prev, cur = timeline[i - 1], timeline[i]
         delta = (cur.unrealized + cur.realized) - (prev.unrealized + prev.realized)
-        sod_value = prev.cash + prev.deployed + prev.unrealized + prev.realized
+        sod_value = prev.cash + prev.deployed + prev.unrealized
         r = float(delta / sod_value) if sod_value > 0 else 0.0
         pnl_labels.append(cur.date.isoformat())
         pnl_notional.append(float(delta))
@@ -1720,6 +1721,7 @@ def _render_html(
         <button class="lookback-btn" data-target="snapshot" data-days="30">1M</button>
         <button class="lookback-btn" data-target="snapshot" data-days="90">3M</button>
         <button class="lookback-btn" data-target="snapshot" data-days="365">1Y</button>
+        <button class="lookback-btn" data-target="snapshot" data-days="1095">3Y</button>
       </div>
     </div>
     <canvas id="chart"></canvas>
@@ -1738,6 +1740,7 @@ def _render_html(
         <button class="lookback-btn" data-target="detail" data-days="30">1M</button>
         <button class="lookback-btn" data-target="detail" data-days="90">3M</button>
         <button class="lookback-btn" data-target="detail" data-days="365">1Y</button>
+        <button class="lookback-btn" data-target="detail" data-days="1095">3Y</button>
       </div>
     </div>
     <div id="detail-empty">Select a row in Open Positions to view its price history.</div>
@@ -1755,6 +1758,7 @@ def _render_html(
         <button class="lookback-btn" data-target="pnl" data-days="30">1M</button>
         <button class="lookback-btn" data-target="pnl" data-days="90">3M</button>
         <button class="lookback-btn" data-target="pnl" data-days="365">1Y</button>
+        <button class="lookback-btn" data-target="pnl" data-days="1095">3Y</button>
       </div>
     </div>
     <canvas id="pnl-canvas"></canvas>
@@ -1786,7 +1790,6 @@ const snapshotChart = new Chart(ctx, {{
       {{ type:'bar', label:'Cash', data: tail(data.cash, snapshotLookback), backgroundColor:'#4a4f57', stack:'s', borderWidth:0 }},
       {{ type:'bar', label:'Capital Deployed', data: tail(data.deployed, snapshotLookback), backgroundColor:'#7e858f', stack:'s', borderWidth:0 }},
       {{ type:'bar', label:'Unrealised P&L', data: tail(data.unrealized, snapshotLookback), backgroundColor:'#3fb27f', stack:'s', borderWidth:0 }},
-      {{ type:'bar', label:'Realised P&L', data: tail(data.realized, snapshotLookback), backgroundColor:'#1f6b48', stack:'s', borderWidth:0 }},
       {{ type:'line', label:'Total Invested Capital', data: tail(data.deposited, snapshotLookback),
          borderColor:'#8b95a3', backgroundColor:'#8b95a3', borderWidth:1.5,
          stepped:'before', pointRadius:0, fill:false, borderDash:[4,3] }}
@@ -1970,10 +1973,10 @@ document.getElementById('btn-pnl-return').addEventListener('click', () => setPnl
 function setSnapshotLookback(n) {{
   snapshotLookback = n;
   snapshotChart.data.labels = tail(data.labels, n);
-  const keys = ['cash','deployed','unrealized','realized','deposited'];
+  const keys = ['cash','deployed','unrealized','deposited'];
   keys.forEach((k, i) => {{ snapshotChart.data.datasets[i].data = tail(data[k], n); }});
   snapshotChart.update();
-  const lbl = n === 365 ? 'Trailing 1Y' : n === 90 ? 'Trailing 3M' : 'Trailing 1M';
+  const lbl = n >= 1095 ? 'Trailing 3Y' : n === 365 ? 'Trailing 1Y' : n === 90 ? 'Trailing 3M' : 'Trailing 1M';
   document.getElementById('snapshot-range').textContent = lbl;
 }}
 function setPnlLookback(n) {{
