@@ -1,0 +1,32 @@
+# IBKR Dashboard Configuration
+#
+# Defines the user → broker → accounts hierarchy rendered in the dashboard
+# sidebar. Each account_id must correspond to a FlexStatement in the saved XML.
+
+users:
+  - name: Oliver Warwick
+    brokers:
+      - name: IBKR
+        accounts:
+          - id: U20984787
+            label: S&S ISA
+            description: Stocks & Shares ISA
+          - id: U20984788
+            label: GIA
+            description: General Investment Account
+      - name: Hargreaves Lansdown
+        accounts:
+          - id: HL-ISA
+            label: HL S&S ISA
+            description: Hargreaves Lansdown Stocks & Shares ISA
+          - id: HL-SIPP
+            label: HL SIPP
+            description: Hargreaves Lansdown Self-Invested Personal Pension
+          - id: HL-SHARES
+            label: HL Fund & Share
+            description: Hargreaves Lansdown Fund & Share Account
+      - name: AJ Bell
+        accounts:
+          - id: AJB-ABBXDDL
+            label: AJB LISA
+            description: AJ Bell Lifetime ISA
