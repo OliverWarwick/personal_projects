@@ -27,8 +27,9 @@ from typing import Any
 
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from src.apps.finances_dashboard.config import (
     DashboardConfig,
@@ -79,7 +80,6 @@ def ensure_flex_xml(xml_path: Path = DEFAULT_XML) -> None:
         return
     xml_path.write_bytes(xml)
     logger.info("refreshed Flex XML at %s (%d bytes)", xml_path, len(xml))
-DEFAULT_ACCOUNT = "U20984788"
 DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "finances_dashboard.yaml"
 TRAILING_DAYS = 30
 
@@ -453,7 +453,7 @@ def _closed_positions(stmt: ET.Element) -> list[ClosedRow]:
     sorted_trades.sort(key=lambda x: x[0])
 
     # Per-ticker FIFO lot queue of (open_date, remaining_qty).
-    lots: dict[str, list[list[Decimal | date]]] = {}
+    lots: dict[str, list[tuple[date, Decimal]]] = {}
     rows: list[ClosedRow] = []
     for d, t in sorted_trades:
         sym = t.get("symbol") or ""
@@ -462,7 +462,7 @@ def _closed_positions(stmt: ET.Element) -> list[ClosedRow]:
         pnl_dec = _to_dec(t.get("fifoPnlRealized"))
         is_close = oc in {"C", "CLOSE", "OPENCLOSE"} or pnl_dec != 0 or qty < 0
         if not is_close:
-            lots.setdefault(sym, []).append([d, qty])  # type: ignore[list-item]
+            lots.setdefault(sym, []).append((d, qty))
             continue
         remaining = -qty if qty < 0 else qty
         open_date: date | None = None
@@ -470,12 +470,12 @@ def _closed_positions(stmt: ET.Element) -> list[ClosedRow]:
         while remaining > 0 and queue:
             lot_date, lot_qty = queue[0]
             if open_date is None:
-                open_date = lot_date  # type: ignore[assignment]
-            if lot_qty <= remaining:  # type: ignore[operator]
-                remaining -= lot_qty  # type: ignore[assignment, operator]
+                open_date = lot_date
+            if lot_qty <= remaining:
+                remaining -= lot_qty
                 queue.pop(0)
             else:
-                queue[0][1] = lot_qty - remaining  # type: ignore[operator]
+                queue[0] = (lot_date, lot_qty - remaining)
                 remaining = Decimal(0)
         fx = _to_dec(t.get("fxRateToBase")) or Decimal(1)
         rows.append(
@@ -551,6 +551,10 @@ def _build_timeline(
     When ``cache_key`` is supplied, the result is read from / written to
     :class:`TimelineCache` keyed on a hash of the statement's trades and
     cash transactions. Aggregate views pass ``None`` to skip caching.
+
+    FIFO lot state and cash are maintained incrementally across the day loop
+    so each business day costs O(new_trades + open_positions) rather than
+    O(all_trades × days).
     """
     from src.apps.finances_dashboard.timeline_cache import (
         TimelineCache,
@@ -560,13 +564,13 @@ def _build_timeline(
     events = _events(stmt, base_currency)
     if not events:
         return []
-    cache: TimelineCache | None = None
+    timeline_cache: TimelineCache | None = None
     trades_hash: str | None = None
     today_ref = datetime.now(UTC).date() - timedelta(days=1)
     if cache_key:
-        cache = TimelineCache()
+        timeline_cache = TimelineCache()
         trades_hash = hash_trades(stmt)
-        cached = cache.load(cache_key, trades_hash, today_ref)
+        cached = timeline_cache.load(cache_key, trades_hash, today_ref)
         if cached is not None:
             return cached
     today = max(*(e[0] for e in events), datetime.now(UTC).date() - timedelta(days=1))
@@ -598,60 +602,16 @@ def _build_timeline(
             series_cache[yf_sym] = s
         return series_cache[yf_sym]
 
-    cash = Decimal(0)
-    realized = Decimal(0)
-    deposited = Decimal(0)
-    snapshots: list[TimelineRow] = []
-    for ts in bdays:
-        d = ts.date()
-        for ev_d, kind, amt, _label, pnl in events:
-            if ev_d != d:
-                continue
-            if kind == "cash":
-                cash += amt
-                # "Total Invested" = real money in/out only. Skip forex legs
-                # (internal GBP↔USD conversions) and broker dividends/fees/
-                # interest — they're not deposits.
-                if _label == "Deposits/Withdrawals":
-                    deposited += amt
-            else:
-                cash -= amt
-                realized += pnl
-        snapshots.append(_snapshot(d, stmt, cash, realized, deposited, _series, base_currency, is_final=(d == today)))
-    first_active = events[0][0]
-    result = [s for s in snapshots if s.date >= first_active]
-    if cache is not None and cache_key and trades_hash is not None:
-        cache.save(cache_key, trades_hash, result)
-    return result
+    # Pre-group events by date for O(1) lookup per day.
+    events_by_day: dict[date, list[tuple[date, str, Decimal, str, Decimal]]] = {}
+    for ev in events:
+        events_by_day.setdefault(ev[0], []).append(ev)
 
-
-def _snapshot(
-    d: date,
-    stmt: ET.Element,
-    cash: Decimal,
-    realized: Decimal,
-    deposited: Decimal,
-    series_fn: Any,
-    base_currency: str,
-    *,
-    is_final: bool = False,
-) -> TimelineRow:
-    """Compute deployed cost-basis and MTM unrealised P&L for date ``d``.
-
-    Replays the statement's trades up to and including ``d`` to derive
-    open quantities and cost bases per ticker (FIFO lot-matching), then
-    marks each holding using the closest ``series_fn`` close on or before
-    ``d``.
-    """
-    # FIFO replay: each BUY pushes a (qty, unit_cost_base) lot, each SELL
-    # consumes lots from the front. This matches how UK brokers report
-    # cost basis (and how HMRC computes CGT), so the replay's residual
-    # cost basis agrees with the broker's authoritative figure — no
-    # final-day anchor needed.
+    # Pre-parse and sort all trades once.
     # Group by IBKR ``conid`` (stable contract id) so trades booked under
     # different symbol codes for the same security fold into one position.
     # Synthetic statements (HL/AJB) have no conid, so fall back to the symbol.
-    rows: list[tuple[date, str, str, Decimal, Decimal, Decimal]] = []
+    parsed_trades: list[tuple[date, str, str, Decimal, Decimal, Decimal]] = []
     for t in stmt.iter("Trade"):
         if t.get("levelOfDetail") != "EXECUTION":
             continue
@@ -662,40 +622,16 @@ def _snapshot(
         if not d_str:
             continue
         td = datetime.strptime(d_str, "%Y%m%d").replace(tzinfo=UTC).date()
-        if td > d:
-            continue
         q = _to_dec(t.get("quantity"))
         proc = _to_dec(t.get("proceeds"))
         fx = _to_dec(t.get("fxRateToBase")) or Decimal(1)
         key = t.get("conid") or sym
-        rows.append((td, key, sym, q, proc, fx))
-    rows.sort(key=lambda r: r[0])
-    lots: dict[str, list[tuple[Decimal, Decimal]]] = {}  # key → [(qty, unit_cost_base)]
-    key_to_sym: dict[str, str] = {}
-    for _td, key, sym, q, proc, fx in rows:
-        key_to_sym[key] = sym  # latest symbol wins (rows sorted by date)
-        if q > 0:
-            unit_cost = (-proc * fx) / q
-            lots.setdefault(key, []).append((q, unit_cost))
-        elif q < 0:
-            remaining = -q
-            klots = lots.get(key, [])
-            while remaining > 0 and klots:
-                lot_q, lot_c = klots[0]
-                take = min(lot_q, remaining)
-                remaining -= take
-                lot_q -= take
-                if lot_q == 0:
-                    klots.pop(0)
-                else:
-                    klots[0] = (lot_q, lot_c)
-    qty: dict[str, Decimal] = {k: sum((lq for lq, _ in v), Decimal(0)) for k, v in lots.items()}
-    cost: dict[str, Decimal] = {k: sum((lq * lc for lq, lc in v), Decimal(0)) for k, v in lots.items()}
+        parsed_trades.append((td, key, sym, q, proc, fx))
+    parsed_trades.sort(key=lambda r: r[0])
 
-    # Per-key snapshot mark (markPrice × fxRateToBase) from OpenPosition.
-    # Used as a fallback when yfinance has no series for the symbol
-    # (typical for HL OEICs and gilts) so the headline portfolio value
-    # reflects the broker's bid quote instead of stale cost basis.
+    # Pre-compute OpenPosition marks (static for the session). Used as a
+    # fallback when yfinance has no series for the symbol (typical for HL
+    # OEICs and gilts) and on the final day to prefer the broker's bid quote.
     op_mark_base: dict[str, Decimal] = {}
     for op in stmt.iter("OpenPosition"):
         if op.get("levelOfDetail") not in {"SUMMARY", None}:
@@ -709,48 +645,107 @@ def _snapshot(
         if mark > 0:
             op_mark_base[op_key] = mark * op_fx
 
-    deployed = sum(cost.values(), Decimal(0))
-    mtm = Decimal(0)
-    for key, q in qty.items():
-        if q == 0:
-            continue
-        sym = key_to_sym.get(key, key)
-        # On the final-day snapshot, prefer the broker's authoritative
-        # markPrice over yfinance close (which can drift from HL/AJB bids).
-        if is_final and key in op_mark_base:
-            mtm += op_mark_base[key] * q
-            continue
-        yf_sym, ccy = IBKR_TO_YF.get(sym, (sym, base_currency))
-        try:
-            s = series_fn(yf_sym, ccy)
-        except MarketDataError:
-            if yf_sym not in _WARNED_MISSING:
-                logger.warning("no price data for %s; using OpenPosition.markPrice", yf_sym)
-                _WARNED_MISSING.add(yf_sym)
-            fallback_mark = op_mark_base.get(key)
-            mtm += fallback_mark * q if fallback_mark is not None else cost.get(key, Decimal(0))
-            continue
-        except Exception:
-            logger.exception("yfinance fetch failed for %s", yf_sym)
-            fallback_mark = op_mark_base.get(key)
-            mtm += fallback_mark * q if fallback_mark is not None else cost.get(key, Decimal(0))
-            continue
-        avail = s[s.index <= pd.Timestamp(d)]
-        if avail.empty:
-            fallback_mark = op_mark_base.get(key)
-            mtm += fallback_mark * q if fallback_mark is not None else cost.get(key, Decimal(0))
-            continue
-        px = Decimal(str(float(avail.iloc[-1])))
-        mtm += px * q
-    unrealized = mtm - deployed
-    return TimelineRow(
-        date=d,
-        cash=cash,
-        deployed=deployed,
-        unrealized=unrealized,
-        realized=realized,
-        total_deposited=deposited,
-    )
+    # Running state — all mutated in place across the day loop.
+    cash = Decimal(0)
+    realized = Decimal(0)
+    deposited = Decimal(0)
+    trade_ptr = 0  # index into parsed_trades
+    lots: dict[str, list[tuple[Decimal, Decimal]]] = {}  # key → [(qty, unit_cost_base)]
+    key_to_sym: dict[str, str] = {}
+
+    snapshots: list[TimelineRow] = []
+    for ts in bdays:
+        d = ts.date()
+
+        # Apply cash/trade events for this day.
+        for _ev_d, kind, amt, _label, pnl in events_by_day.get(d, []):
+            if kind == "cash":
+                cash += amt
+                # "Total Invested" = real money in/out only. Skip forex legs
+                # (internal GBP↔USD conversions) and broker dividends/fees/
+                # interest — they're not deposits.
+                if _label == "Deposits/Withdrawals":
+                    deposited += amt
+            else:
+                cash -= amt
+                realized += pnl
+
+        # Advance FIFO lot state to include all trades on or before d.
+        while trade_ptr < len(parsed_trades) and parsed_trades[trade_ptr][0] <= d:
+            _td, key, sym, q, proc, fx = parsed_trades[trade_ptr]
+            key_to_sym[key] = sym  # latest symbol wins (sorted by date)
+            if q > 0:
+                unit_cost = (-proc * fx) / q
+                lots.setdefault(key, []).append((q, unit_cost))
+            elif q < 0:
+                remaining = -q
+                klots = lots.get(key, [])
+                while remaining > 0 and klots:
+                    lot_q, lot_c = klots[0]
+                    take = min(lot_q, remaining)
+                    remaining -= take
+                    lot_q -= take
+                    if lot_q == 0:
+                        klots.pop(0)
+                    else:
+                        klots[0] = (lot_q, lot_c)
+            trade_ptr += 1
+
+        # Compute cost basis (deployed) and mark-to-market for open positions.
+        is_final = d == today
+        deployed = Decimal(0)
+        mtm = Decimal(0)
+        for key, klots in lots.items():
+            if not klots:
+                continue
+            qty_k = sum((lq for lq, _ in klots), Decimal(0))
+            if qty_k == 0:
+                continue
+            cost_k = sum((lq * lc for lq, lc in klots), Decimal(0))
+            deployed += cost_k
+            sym = key_to_sym.get(key, key)
+            # On the final-day snapshot, prefer the broker's authoritative
+            # markPrice over yfinance close (which can drift from HL/AJB bids).
+            if is_final and key in op_mark_base:
+                mtm += op_mark_base[key] * qty_k
+                continue
+            yf_sym, ccy = IBKR_TO_YF.get(sym, (sym, base_currency))
+            try:
+                s = _series(yf_sym, ccy)
+            except MarketDataError:
+                if yf_sym not in _WARNED_MISSING:
+                    logger.warning("no price data for %s; using OpenPosition.markPrice", yf_sym)
+                    _WARNED_MISSING.add(yf_sym)
+                fallback = op_mark_base.get(key)
+                mtm += fallback * qty_k if fallback is not None else cost_k
+                continue
+            except Exception:
+                logger.exception("yfinance fetch failed for %s", yf_sym)
+                fallback = op_mark_base.get(key)
+                mtm += fallback * qty_k if fallback is not None else cost_k
+                continue
+            avail = s[s.index <= pd.Timestamp(d)]
+            if avail.empty:
+                fallback = op_mark_base.get(key)
+                mtm += fallback * qty_k if fallback is not None else cost_k
+                continue
+            px = Decimal(str(float(avail.iloc[-1])))
+            mtm += px * qty_k
+
+        snapshots.append(TimelineRow(
+            date=d,
+            cash=cash,
+            deployed=deployed,
+            unrealized=mtm - deployed,
+            realized=realized,
+            total_deposited=deposited,
+        ))
+
+    first_active = events[0][0]
+    result = [s for s in snapshots if s.date >= first_active]
+    if timeline_cache is not None and cache_key and trades_hash is not None:
+        timeline_cache.save(cache_key, trades_hash, result)
+    return result
 
 
 def _xirr(cashflows: list[tuple[date, float]]) -> float | None:
@@ -1049,7 +1044,32 @@ def _symbol_series(
     return labels, [float(v) for v in local.to_numpy()], [float(v) for v in base.to_numpy()], ccy
 
 
-def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> FastAPI:  # noqa: PLR0915
+def _filter_config(config: DashboardConfig, permitted: frozenset[str]) -> DashboardConfig:
+    """Return a config restricted to ``permitted`` account IDs.
+
+    An empty ``permitted`` set means unrestricted — the full config is returned
+    unchanged.
+    """
+    if not permitted:
+        return config
+    users: list[UserEntry] = []
+    for u in config.users:
+        brokers: list[BrokerEntry] = []
+        for b in u.brokers:
+            accounts = [a for a in b.accounts if a.id in permitted]
+            if accounts:
+                brokers.append(BrokerEntry(name=b.name, accounts=accounts))
+        if brokers:
+            users.append(UserEntry(name=u.name, brokers=brokers))
+    return DashboardConfig(users=users)
+
+
+def _build_app(  # noqa: PLR0915
+    xml_path: Path,
+    config: DashboardConfig,
+    trailing_days: int,
+    auth_db: Any = None,
+) -> FastAPI:
     """Construct the FastAPI app with routes preloaded with parsed data."""
     from src.apps.finances_dashboard.ajbell_provider import (
         AJBELL_ACCOUNT_PREFIX,
@@ -1061,20 +1081,38 @@ def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> F
     )
 
     app = FastAPI(title="Finances Dashboard")
-    valid_accounts = set(config.all_account_ids())
+
+    if auth_db is not None:
+        app.add_middleware(
+            SessionMiddleware,
+            secret_key=auth_db.session_secret(),
+            session_cookie="fd_session",
+            https_only=False,  # allow HTTP for local service
+            same_site="lax",
+        )
+
     hl_statements = load_hl_statements()
     ajbell_statements = load_ajbell_statements()
     synthetic_statements = {**hl_statements, **ajbell_statements}
     synthetic_prefixes = (HL_ACCOUNT_PREFIX, AJBELL_ACCOUNT_PREFIX)
-    aggregates: dict[str, tuple[Any, list[str]]] = {}
-    for u in config.users:
-        ids = [a.id for b in u.brokers for a in b.accounts]
-        if len(ids) >= 2:  # noqa: PLR2004
-            aggregates[f"all-{_user_slug(u.name)}"] = (u, ids)
 
-    def _resolve(account_id: str) -> tuple[ET.Element, str, bool]:
-        if account_id in aggregates:
-            _user, ids = aggregates[account_id]
+    # ------------------------------------------------------------------
+    # Per-request helpers
+    # ------------------------------------------------------------------
+
+    def _resolve(account_id: str, user_config: DashboardConfig) -> tuple[ET.Element, str, bool]:
+        """Return (stmt, base_currency, is_aggregate) for ``account_id``."""
+        # Build the aggregate slug map from the user's filtered config so they
+        # only see accounts they are permitted to aggregate.
+        user_aggregates: dict[str, tuple[Any, list[str]]] = {}
+        for u in user_config.users:
+            ids = [a.id for b in u.brokers for a in b.accounts]
+            if len(ids) >= 2:  # noqa: PLR2004
+                user_aggregates[f"all-{_user_slug(u.name)}"] = (u, ids)
+        valid = set(user_config.all_account_ids())
+
+        if account_id in user_aggregates:
+            _u, ids = user_aggregates[account_id]
             ibkr_ids = [i for i in ids if not i.startswith(synthetic_prefixes)]
             synth_ids = [i for i in ids if i.startswith(synthetic_prefixes)]
             if ibkr_ids:
@@ -1092,23 +1130,77 @@ def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> F
             if synth_stmt is None:
                 raise RuntimeError(f"Synthetic account not loaded: {account_id}")
             return synth_stmt, "GBP", False
-        if account_id in valid_accounts:
+        if account_id in valid:
             stmt, base = _parse_account(xml_path, account_id)
             return stmt, base, False
-        raise RuntimeError(f"Unknown account_id: {account_id}")
+        raise RuntimeError(f"Unknown or forbidden account: {account_id}")
+
+    def _auth_check(request: Request) -> DashboardConfig | RedirectResponse:
+        """Return the per-user filtered config, or a redirect to the login page."""
+        if auth_db is None:
+            return config  # auth disabled — full access
+        username: str | None = getattr(request, "session", {}).get("username")
+        if not username:
+            return RedirectResponse(url="/login", status_code=302)
+        user = auth_db.get_user(username)
+        if user is None:
+            return RedirectResponse(url="/login", status_code=302)
+        return _filter_config(config, user.permitted_accounts)
+
+    # ------------------------------------------------------------------
+    # Auth routes (no-ops when auth_db is None)
+    # ------------------------------------------------------------------
+
+    @app.get("/login", response_class=HTMLResponse)
+    def login_page(request: Request, error: str = "") -> HTMLResponse:  # pyright: ignore[reportUnusedFunction]
+        return HTMLResponse(_render_login_html(error or None))
+
+    @app.post("/login", response_class=HTMLResponse)
+    async def login_post(request: Request) -> Any:  # pyright: ignore[reportUnusedFunction]
+        if auth_db is None:
+            return RedirectResponse(url="/", status_code=302)
+        form = await request.form()
+        username = str(form.get("username") or "")
+        password = str(form.get("password") or "")
+        next_url = str(form.get("next") or "/")
+        user = auth_db.verify(username, password)
+        if user is None:
+            return HTMLResponse(
+                _render_login_html(error="Invalid username or password"),
+                status_code=401,
+            )
+        request.session["username"] = username
+        return RedirectResponse(url=next_url, status_code=302)
+
+    @app.get("/logout")
+    def logout(request: Request) -> RedirectResponse:  # pyright: ignore[reportUnusedFunction]
+        if hasattr(request, "session"):
+            request.session.clear()
+        return RedirectResponse(url="/login" if auth_db else "/", status_code=302)
+
+    # ------------------------------------------------------------------
+    # Dashboard routes
+    # ------------------------------------------------------------------
 
     @app.get("/", response_class=HTMLResponse)
-    def root() -> RedirectResponse:  # pyright: ignore[reportUnusedFunction]
-        """Redirect to the first configured account."""
-        return RedirectResponse(url=f"/account/{config.first_account_id()}")
+    def root(request: Request) -> Any:  # pyright: ignore[reportUnusedFunction]
+        result = _auth_check(request)
+        if isinstance(result, RedirectResponse):
+            return result
+        return RedirectResponse(url=f"/account/{result.first_account_id()}")
 
     @app.get("/account/{account_id}", response_class=HTMLResponse)
-    def index(account_id: str) -> str:  # pyright: ignore[reportUnusedFunction]
+    def index(request: Request, account_id: str) -> Any:  # pyright: ignore[reportUnusedFunction]
         """Render the dashboard page for ``account_id``."""
-        stmt, base, is_agg = _resolve(account_id)
+        result = _auth_check(request)
+        if isinstance(result, RedirectResponse):
+            return result
+        user_config = result
+        try:
+            stmt, base, is_agg = _resolve(account_id, user_config)
+        except RuntimeError:
+            return RedirectResponse(url=f"/account/{user_config.first_account_id()}", status_code=302)
         if is_agg:
-            # Build per-leaf positions tagged with their account_id so the
-            # aggregate row can preserve its contributors for drill-down.
             leaf_positions: list[PositionRow] = []
             for sub in stmt.findall("FlexStatement"):
                 leaf_positions.extend(
@@ -1135,14 +1227,21 @@ def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> F
             else {}
         )
         stats = _summarise(timeline, deposit_events, rf_returns)
-        return _render_html(account_id, base, stats, positions, closed, timeline, config)
+        return _render_html(account_id, base, stats, positions, closed, timeline, user_config)
 
-    cache: dict[str, dict[str, Any]] = {}
+    symbol_cache: dict[str, dict[str, Any]] = {}
 
     @app.get("/api/{account_id}/portfolio")
-    def portfolio(account_id: str) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
+    def portfolio(request: Request, account_id: str) -> Any:  # pyright: ignore[reportUnusedFunction]
         """Return daily portfolio value plus all buy/sell trade markers."""
-        stmt, base, _is_agg = _resolve(account_id)
+        result = _auth_check(request)
+        if isinstance(result, RedirectResponse):
+            return result
+        user_config = result
+        try:
+            stmt, base, _is_agg = _resolve(account_id, user_config)
+        except RuntimeError:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         timeline = _build_timeline(
             stmt,
             base,
@@ -1198,9 +1297,16 @@ def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> F
         )
 
     @app.get("/api/{account_id}/symbol/{ticker}")
-    def symbol(account_id: str, ticker: str) -> JSONResponse:  # pyright: ignore[reportUnusedFunction]
+    def symbol(request: Request, account_id: str, ticker: str) -> Any:  # pyright: ignore[reportUnusedFunction]
         """Return JSON price series + trade markers for ``ticker``."""
-        stmt, base, _is_agg = _resolve(account_id)
+        result = _auth_check(request)
+        if isinstance(result, RedirectResponse):
+            return result
+        user_config = result
+        try:
+            stmt, base, _is_agg = _resolve(account_id, user_config)
+        except RuntimeError:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         markers = _trade_markers(stmt, ticker)
         if markers:
             start = date.fromisoformat(markers[0]["date"]) - timedelta(days=14)
@@ -1208,8 +1314,8 @@ def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> F
             start = datetime.now(UTC).date() - timedelta(days=181)
         end = datetime.now(UTC).date() - timedelta(days=1)
         cache_key = f"{ticker}|{start}|{end}"
-        if cache_key in cache:
-            payload = dict(cache[cache_key])
+        if cache_key in symbol_cache:
+            payload = dict(symbol_cache[cache_key])
             payload["markers"] = markers
             return JSONResponse(payload)
         labels: list[str] = []
@@ -1222,18 +1328,12 @@ def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> F
         except Exception as exc:
             logger.exception("yfinance fetch failed for %s", ticker)
             error = f"{type(exc).__name__}: {exc}"
-        # The Trade row's fxRateToBase is FX into the *statement's* base, which
-        # may not match the chart's base (e.g. aggregate "All Accounts" view is
-        # GBP but the IBKR statement is USD). Recompute price_base from the
-        # local/base close ratio on or before the marker date so the buy/sell
-        # markers always live on the same y-scale as the price line.
         if labels and local and base_series:
             label_to_idx = {lab: i for i, lab in enumerate(labels)}
             for m in markers:
                 d = m["date"]
                 idx = label_to_idx.get(d)
                 if idx is None:
-                    # Walk back to the nearest prior trading day.
                     candidates = [i for lab, i in label_to_idx.items() if lab <= d]
                     if not candidates:
                         continue
@@ -1253,10 +1353,69 @@ def _build_app(xml_path: Path, config: DashboardConfig, trailing_days: int) -> F
             "error": error,
         }
         if error is None:
-            cache[cache_key] = {k: v for k, v in payload.items() if k != "markers"}
+            symbol_cache[cache_key] = {k: v for k, v in payload.items() if k != "markers"}
         return JSONResponse(payload)
 
     return app
+
+
+def _render_login_html(error: str | None) -> str:
+    """Return a minimal login page HTML string."""
+    error_html = (
+        f'<p class="login-error">{error}</p>' if error else ""
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Finances Dashboard — Sign In</title>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; }}
+    body {{
+      margin: 0; min-height: 100vh; display: flex;
+      align-items: center; justify-content: center;
+      background: #0f1117; font-family: system-ui, sans-serif; color: #e2e8f0;
+    }}
+    .card {{
+      background: #1a1f2e; border: 1px solid #2d3748;
+      border-radius: 10px; padding: 2.5rem 2rem; width: 340px;
+    }}
+    h1 {{ margin: 0 0 1.5rem; font-size: 1.25rem; font-weight: 600; text-align: center; }}
+    label {{ display: block; font-size: .8rem; color: #94a3b8; margin-bottom: .3rem; }}
+    input {{
+      width: 100%; padding: .55rem .75rem; background: #111827;
+      border: 1px solid #374151; border-radius: 6px; color: #e2e8f0;
+      font-size: .95rem; margin-bottom: 1rem; outline: none;
+    }}
+    input:focus {{ border-color: #4f86f7; }}
+    button {{
+      width: 100%; padding: .65rem; background: #2563eb; color: #fff;
+      border: none; border-radius: 6px; font-size: .95rem;
+      font-weight: 600; cursor: pointer; margin-top: .25rem;
+    }}
+    button:hover {{ background: #1d4ed8; }}
+    .login-error {{
+      background: #3b1f1f; border: 1px solid #7f1d1d; border-radius: 6px;
+      padding: .6rem .8rem; font-size: .85rem; color: #fca5a5;
+      margin-bottom: 1rem;
+    }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Finances Dashboard</h1>
+    {error_html}
+    <form method="post" action="/login">
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username" autofocus required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>"""
 
 
 def _render_html(
@@ -2373,6 +2532,8 @@ document.getElementById('btn-local').onclick = () => {{ detailMode = 'local'; ap
 
 def main() -> int:
     """Run the dashboard server."""
+    from src.apps.finances_dashboard.auth import AuthDB  # noqa: PLC0415
+
     parser = argparse.ArgumentParser(description="IBKR account dashboard")
     parser.add_argument("--xml", default=str(DEFAULT_XML), help="Saved Flex XML path")
     parser.add_argument(
@@ -2381,12 +2542,26 @@ def main() -> int:
     )
     parser.add_argument("--port", type=int, default=8765, help="HTTP port")
     parser.add_argument("--trailing-days", type=int, default=TRAILING_DAYS)
+    parser.add_argument(
+        "--auth-db",
+        default=None,
+        help="Path to auth SQLite database. When set, login is required. "
+             "Create with scripts/setup_finances_auth.py.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
     config = load_config(Path(args.config))
     ensure_flex_xml(Path(args.xml))
-    app = _build_app(Path(args.xml), config, args.trailing_days)
+
+    auth_db: AuthDB | None = None
+    if args.auth_db:
+        auth_db = AuthDB(Path(args.auth_db).expanduser())
+        logger.info("Auth enabled; DB at %s", auth_db.db_path)
+    else:
+        logger.warning("--auth-db not set; running WITHOUT authentication")
+
+    app = _build_app(Path(args.xml), config, args.trailing_days, auth_db)
     logger.info("Dashboard at http://127.0.0.1:%d/", args.port)
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
     return 0

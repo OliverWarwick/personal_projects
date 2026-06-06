@@ -84,13 +84,15 @@ def hash_trades(stmt: ET.Element) -> str:
     produce the same timeline therefore hash identically; any edit to a
     historical trade invalidates the cache.
     """
-    items: list[tuple[str, str, str, str, str]] = [
+    items: list[tuple[str, str, str, str, str, str, str]] = [
         (
             t.get("tradeDate") or "",
             t.get("symbol") or "",
             t.get("quantity") or "",
             t.get("tradePrice") or "",
             t.get("fifoPnlRealized") or "",
+            t.get("conid") or "",
+            t.get("openCloseIndicator") or "",
         )
         for t in stmt.iter("Trade")
     ]

@@ -20,14 +20,11 @@ import xml.etree.ElementTree as ET
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-from src.apps.finances_dashboard.config import load_config
 from src.apps.finances_dashboard.ajbell_provider import (
     load_ajbell_statements,
 )
-from src.apps.finances_dashboard.hl_provider import (
-    HL_ACCOUNT_PREFIX,
-    load_hl_statements,
-)
+from src.apps.finances_dashboard.config import load_config
+from src.apps.finances_dashboard.hl_provider import load_hl_statements
 from src.apps.finances_dashboard.run import (
     DEFAULT_CONFIG,
     DEFAULT_XML,
@@ -109,7 +106,7 @@ def _warm_one(
             )
         except MarketDataError as exc:
             return f"skipped — {exc}"
-        except Exception as exc:  # noqa: BLE001 — yfinance raises a variety
+        except Exception as exc:
             if "RateLimit" in type(exc).__name__ and attempt < _MAX_RATE_LIMIT_RETRIES - 1:
                 wait = _RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1)
                 logger.warning("rate limited on %s; sleeping %ds", yf_sym, wait)
@@ -121,7 +118,7 @@ def _warm_one(
     return "rate-limited"
 
 
-def main() -> int:  # noqa: PLR0915 — single linear script
+def main() -> int:
     """Warm the price cache for every holding across every account."""
     parser = argparse.ArgumentParser(description="Pre-warm the yfinance cache")
     parser.add_argument("--xml", default=str(DEFAULT_XML))
@@ -139,22 +136,21 @@ def main() -> int:  # noqa: PLR0915 — single linear script
     statements = _statements(Path(args.xml))
     logger.info("found %d statements", len(statements))
 
-    universe: dict[str, tuple[str, str, str, date]] = {}
+    universe: dict[str, tuple[str, str, str, str, date]] = {}
     for account_id, stmt, base in statements:
         for yf_sym, (ibkr_sym, ccy, earliest) in _collect_symbols(stmt, base).items():
             prior = universe.get(yf_sym)
-            if prior is None or earliest < prior[3]:
-                universe[yf_sym] = (account_id, ibkr_sym, ccy, earliest)
+            if prior is None or earliest < prior[4]:
+                universe[yf_sym] = (account_id, ibkr_sym, ccy, base, earliest)
     logger.info("resolved %d unique yfinance symbols", len(universe))
 
     yf_client = CachedYFinanceClient()
     today = date.today()  # noqa: DTZ011
     results: list[tuple[str, str, str]] = []
-    for yf_sym, (account_id, ibkr_sym, ccy, earliest) in sorted(universe.items()):
+    for yf_sym, (_account_id, ibkr_sym, ccy, base, earliest) in sorted(universe.items()):
         # Pad start a touch to absorb weekends / earliest off-by-one trade rows.
         start = earliest - timedelta(days=7)
-        status = _warm_one(yf_client, yf_sym, ccy, "GBP" if account_id.startswith(
-            HL_ACCOUNT_PREFIX) else "USD", start, today)
+        status = _warm_one(yf_client, yf_sym, ccy, base, start, today)
         results.append((yf_sym, ibkr_sym, status))
         time.sleep(_THROTTLE_SECONDS)
 

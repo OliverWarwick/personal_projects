@@ -17,6 +17,7 @@ from src.apps.finances_dashboard._realized import (
     TradeLeg,
     compute_realized_detailed,
 )
+from src.apps.finances_dashboard._reconcile import inject_opening_balances
 from src.clients.ajbell.loader import discover_accounts
 
 if TYPE_CHECKING:
@@ -138,15 +139,13 @@ def synthesize_flex_statement(account: AJBellAccount) -> ET.Element:
     # AJ Bell ISA / Dealing are non-margin; reconcile the synthesised cash
     # trace to the broker snapshot's cash balance and plug any negative dip
     # from missing early deposits.
-    from decimal import Decimal as _Decimal  # noqa: PLC0415
-    from src.apps.finances_dashboard.hl_provider import _inject_opening_balances  # noqa: PLC0415
-    _inject_opening_balances(
+    inject_opening_balances(
         stmt,
         snapshot_holdings=[
             (_symbol_for(h.investment, h.ticker), h.quantity, h.cost_gbp)
             for h in account.portfolio.holdings
         ],
-        target_final_cash=_Decimal(getattr(account.portfolio, "cash_gbp", 0) or 0),
+        target_final_cash=Decimal(getattr(account.portfolio, "cash_gbp", 0) or 0),
     )
 
     return stmt
