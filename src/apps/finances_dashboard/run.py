@@ -199,6 +199,7 @@ class SummaryStats:
     pnl_ytd: Decimal | None
     sharpe: Decimal | None
     var_99: Decimal | None
+    vol_daily: Decimal | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,6 +258,8 @@ def _to_dec(value: str | None) -> Decimal:
 
 def _parse_account(xml_path: Path, account_id: str) -> tuple[ET.Element, str]:
     """Return the ``FlexStatement`` element for ``account_id`` and base currency."""
+    if not xml_path.exists():
+        return ET.Element("FlexStatement", accountId=account_id, currency="GBP"), "GBP"
     tree = ET.parse(xml_path)  # noqa: S314 (trusted local Flex XML)
     for stmt in tree.iter("FlexStatement"):
         if stmt.get("accountId") == account_id:
@@ -275,6 +278,8 @@ def _parse_aggregate(
     trades, open positions, cash transactions, and equity-summary rows from
     every matched account are visited together.
     """
+    if not xml_path.exists():
+        return ET.Element("AggregateStatement"), "GBP"
     tree = ET.parse(xml_path)  # noqa: S314 (trusted local Flex XML)
     wanted = set(account_ids)
     matches: list[ET.Element] = []
@@ -888,6 +893,7 @@ def _summarise(
             pnl_ytd=None,
             sharpe=None,
             var_99=None,
+            vol_daily=None,
         )
     last = timeline[-1]
     # Closed-loop accounting: realised PnL is already reflected in ``cash``
@@ -951,6 +957,7 @@ def _summarise(
             excess_returns.append(r - rf)
     sharpe: Decimal | None = None
     var_99: Decimal | None = None
+    vol_daily: Decimal | None = None
     min_returns = 5
     if len(daily_returns) >= min_returns:
         mean_e = sum(excess_returns) / len(excess_returns)
@@ -958,6 +965,11 @@ def _summarise(
         sd = var_e**0.5
         if sd > 0:
             sharpe = Decimal(str(mean_e / sd * (252**0.5)))
+        # Portfolio volatility: sample stddev of daily portfolio returns (not
+        # excess) — the raw dispersion, annualised in the widget via √252.
+        mean_r = sum(daily_returns) / len(daily_returns)
+        var_r = sum((r - mean_r) ** 2 for r in daily_returns) / (len(daily_returns) - 1)
+        vol_daily = Decimal(str(var_r**0.5))
         sorted_r = sorted(daily_returns)
         pos = 0.01 * (len(sorted_r) - 1)
         lo_i = int(pos)
@@ -978,6 +990,7 @@ def _summarise(
         pnl_ytd=pnl_ytd,
         sharpe=sharpe,
         var_99=var_99,
+        vol_daily=vol_daily,
     )
 
 
@@ -1080,7 +1093,7 @@ def _build_app(  # noqa: PLR0915
         load_hl_statements,
     )
 
-    app = FastAPI(title="Finances Dashboard")
+    app = FastAPI(title="Personal Finance Dashboard")
 
     if auth_db is not None:
         app.add_middleware(
@@ -1356,6 +1369,52 @@ def _build_app(  # noqa: PLR0915
             symbol_cache[cache_key] = {k: v for k, v in payload.items() if k != "markers"}
         return JSONResponse(payload)
 
+    @app.get("/api/{account_id}/correlation")
+    def correlation(request: Request, account_id: str, period: str = "1y") -> Any:  # pyright: ignore[reportUnusedFunction]
+        """Return the realized correlation matrix across the account's holdings."""
+        from src.apps.finances_dashboard.correlation import (
+            Instrument,
+            compute_correlation,
+        )
+
+        result = _auth_check(request)
+        if isinstance(result, RedirectResponse):
+            return result
+        user_config = result
+        try:
+            stmt, base, is_agg = _resolve(account_id, user_config)
+        except RuntimeError:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        if is_agg:
+            leaf: list[PositionRow] = []
+            for sub in stmt.findall("FlexStatement"):
+                leaf.extend(_open_positions(sub, account_id=sub.get("accountId") or ""))
+            positions = _aggregate_position_rows(leaf)
+        else:
+            positions = _open_positions(stmt)
+
+        instruments: list[Instrument] = []
+        for p in positions:
+            if p.quantity == 0:
+                continue
+            yf_sym, ccy = IBKR_TO_YF.get(p.ticker, (p.ticker, p.currency or base))
+            instruments.append(Instrument(label=p.ticker, yf_symbol=yf_sym, currency=ccy))
+
+        res = compute_correlation(instruments, base, period=period)
+        return JSONResponse(
+            {
+                "labels": res.labels,
+                "matrix": res.matrix,
+                "observations": res.observations,
+                "start": res.start.isoformat() if res.start else None,
+                "end": res.end.isoformat() if res.end else None,
+                "dropped": res.dropped,
+                "kind": res.kind,
+                "base_ccy": res.base_currency,
+                "period": period,
+            },
+        )
+
     return app
 
 
@@ -1369,7 +1428,7 @@ def _render_login_html(error: str | None) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Finances Dashboard — Sign In</title>
+  <title>Personal Finance Dashboard — Sign In</title>
   <style>
     *, *::before, *::after {{ box-sizing: border-box; }}
     body {{
@@ -1454,6 +1513,14 @@ def _render_html(
     else:
         var_str = "—"
     var_cls = "neg" if stats.var_99 is not None and stats.var_99 > 0 else "muted"
+    if stats.vol_daily is not None:
+        vol_ann_pct = stats.vol_daily * Decimal(str(252**0.5)) * 100
+        vol_daily_gbp = stats.vol_daily * stats.portfolio_value
+        vol_str = f"{vol_ann_pct:.1f}%"
+        vol_sub = f"±£{vol_daily_gbp:,.0f}/day (1σ)"
+    else:
+        vol_str, vol_sub = "—", "Annualised, 1σ"
+    vol_cls = "muted"
     def _signed_gbp(v: Decimal) -> str:
         sign = "+" if v >= 0 else "-"
         return f"{sign}£{abs(v):,.0f}"
@@ -1577,6 +1644,11 @@ def _render_html(
         <div class="w-label">1d 99% VaR</div>
         <div class="w-value {var_cls}">{var_str}</div>
         <div class="w-sub">1-day historical</div>
+      </div>
+      <div class="widget">
+        <div class="w-label">Volatility</div>
+        <div class="w-value {vol_cls}">{vol_str}</div>
+        <div class="w-sub">{vol_sub}</div>
       </div>
       <div class="widget widget-2col">
         <div>
@@ -1725,7 +1797,7 @@ def _render_html(
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>IBKR Dashboard — {account_id}</title>
+<title>Personal Finance Dashboard — {account_id}</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
 <style>
   :root {{
@@ -1782,6 +1854,22 @@ def _render_html(
                      letter-spacing:.08em; text-transform:uppercase; cursor:pointer; }}
   .toolbar button.active {{ color:var(--accent); border-color:var(--accent); }}
   .toolbar button:disabled {{ opacity:.4; cursor:not-allowed; }}
+  #corr-wrap {{ flex:1; overflow:auto; min-height:0; }}
+  #corr-empty {{ color: var(--muted); font-family: var(--mono); font-size: 12px;
+                 text-align:center; padding: 40px 20px; font-style: italic; }}
+  table.corr {{ border-collapse: separate; border-spacing: 0; table-layout: fixed; }}
+  table.corr th, table.corr td {{ border: none; padding: 0; }}
+  table.corr th.corner {{ background: transparent; }}
+  table.corr th.col-h {{ font-size: 9px; color: var(--muted); height: 70px;
+                         vertical-align: bottom; padding-bottom: 4px; }}
+  table.corr th.col-h span {{ display:inline-block; writing-mode: vertical-rl;
+                              transform: rotate(180deg); white-space: nowrap; }}
+  table.corr th.row-h {{ font-size: 9.5px; color: var(--muted); text-align: right;
+                         padding-right: 6px; white-space: nowrap; }}
+  table.corr td.cell {{ width: 30px; height: 24px; text-align: center;
+                        font-family: var(--mono); font-size: 9.5px; color: #0b0d10;
+                        font-variant-numeric: tabular-nums; }}
+  table.corr td.cell.blank {{ background: transparent; }}
   .placeholder {{ color: var(--muted); font-family: var(--mono); font-size: 12px;
                   text-align:center; padding: 50px 20px; font-style: italic;
                   border: 1px dashed var(--border); border-radius: 3px; }}
@@ -1871,7 +1959,7 @@ def _render_html(
 </head>
 <body>
 <header>
-  <h1>IBKR Portfolio</h1>
+  <h1>Personal Finance Dashboard</h1>
   <span class="sub">{account_subtitle}</span>
   <span class="nav-anchor">
     <button id="nav-trigger" class="nav-trigger" aria-haspopup="true" aria-expanded="false">Accounts ▾</button>
@@ -1953,6 +2041,21 @@ def _render_html(
       </div>
     </div>
     <canvas id="pnl-canvas"></canvas>
+  </div>
+</div>
+<div class="grid" style="margin-top:20px;">
+  <div class="card">
+    <div class="card-head">
+      <h2 id="corr-title">Correlation Matrix</h2>
+      <span class="spacer"></span>
+      <div class="toolbar">
+        <button class="corr-btn" data-period="6mo">6M</button>
+        <button class="corr-btn active" data-period="1y">1Y</button>
+        <button class="corr-btn" data-period="2y">2Y</button>
+      </div>
+    </div>
+    <div id="corr-empty">Loading correlation matrix…</div>
+    <div id="corr-wrap" style="display:none;"></div>
   </div>
 </div>
 <div id="pos-tooltip"></div>
@@ -2503,6 +2606,72 @@ document.querySelectorAll('tr.pos-row').forEach(r => {{
   r.addEventListener('mouseleave', hidePosTooltip);
 }});
 showPortfolio();
+
+// --- Correlation heatmap (upper triangle only) ---
+function corrColor(v) {{
+  // Diverging red(−1) → neutral(0) → green(+1), matching the PnL palette.
+  if (v === null || v === undefined) return 'transparent';
+  const t = Math.max(-1, Math.min(1, v));
+  const pos = [63, 178, 127];   // --pos
+  const neg = [224, 88, 75];    // --neg
+  const mid = [22, 27, 34];     // --panel-2
+  const [a, b] = t >= 0 ? [mid, pos] : [mid, neg];
+  const k = Math.abs(t);
+  const ch = i => Math.round(a[i] + (b[i] - a[i]) * k);
+  return `rgb(${{ch(0)}},${{ch(1)}},${{ch(2)}})`;
+}}
+let corrPeriod = '1y';
+async function loadCorrelation() {{
+  const emptyEl = document.getElementById('corr-empty');
+  const wrap = document.getElementById('corr-wrap');
+  const titleEl = document.getElementById('corr-title');
+  emptyEl.style.display = 'block';
+  emptyEl.textContent = 'Loading correlation matrix…';
+  wrap.style.display = 'none';
+  const res = await fetch('/api/{account_id}/correlation?period=' + corrPeriod);
+  if (!res.ok) {{ emptyEl.textContent = 'Correlation: error'; return; }}
+  const c = await res.json();
+  const labels = c.labels || [];
+  if (labels.length < 2) {{
+    emptyEl.textContent = 'Need at least two holdings with price history.';
+    return;
+  }}
+  titleEl.textContent = 'Correlation Matrix · ' + c.kind + ' returns (' + c.base_ccy + ')';
+  const n = labels.length;
+  let html = '<table class="corr"><thead><tr><th class="corner"></th>';
+  for (let j = 0; j < n; j++) html += '<th class="col-h"><span>' + labels[j] + '</span></th>';
+  html += '</tr></thead><tbody>';
+  for (let i = 0; i < n; i++) {{
+    html += '<tr><th class="row-h">' + labels[i] + '</th>';
+    for (let j = 0; j < n; j++) {{
+      if (j < i) {{ html += '<td class="cell blank"></td>'; continue; }}
+      const v = c.matrix[i][j];
+      const txt = v === null || v === undefined ? '·' : v.toFixed(2);
+      html += '<td class="cell" style="background:' + corrColor(v) + '" '
+            + 'title="' + labels[i] + ' / ' + labels[j] + ': ' + txt + '">' + txt + '</td>';
+    }}
+    html += '</tr>';
+  }}
+  html += '</tbody></table>';
+  const dropped = Object.keys(c.dropped || {{}});
+  if (dropped.length) {{
+    html += '<div style="margin-top:8px;color:var(--muted);font-family:var(--mono);'
+          + 'font-size:9.5px;">Excluded: ' + dropped.join(', ') + '</div>';
+  }}
+  wrap.innerHTML = html;
+  emptyEl.style.display = 'none';
+  wrap.style.display = 'block';
+}}
+document.querySelectorAll('.corr-btn').forEach(btn => {{
+  btn.addEventListener('click', () => {{
+    document.querySelectorAll('.corr-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    corrPeriod = btn.dataset.period;
+    loadCorrelation();
+  }});
+}});
+loadCorrelation();
+
 document.getElementById('btn-base').onclick = () => {{ detailMode = 'base'; applyMode(); }};
 document.getElementById('btn-local').onclick = () => {{ detailMode = 'local'; applyMode(); }};
 

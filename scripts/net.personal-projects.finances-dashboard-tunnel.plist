@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent for the finances dashboard Cloudflare tunnel.
+
+  Exposes the local dashboard (port 8765) via a free trycloudflare.com URL.
+  The URL is assigned fresh on each start — check the log to find it:
+
+    grep "trycloudflare.com" ~/Library/Logs/finances-dashboard-tunnel.error.log
+
+  Install:
+    cp scripts/net.personal-projects.finances-dashboard-tunnel.plist \
+       ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/net.personal-projects.finances-dashboard-tunnel.plist
+
+  Start/stop:
+    launchctl start net.personal-projects.finances-dashboard-tunnel
+    launchctl stop  net.personal-projects.finances-dashboard-tunnel
+
+  View logs:
+    tail -f ~/Library/Logs/finances-dashboard-tunnel.log
+    tail -f ~/Library/Logs/finances-dashboard-tunnel.error.log
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/net.personal-projects.finances-dashboard-tunnel.plist
+    rm ~/Library/LaunchAgents/net.personal-projects.finances-dashboard-tunnel.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>net.personal-projects.finances-dashboard-tunnel</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/cloudflared</string>
+        <string>tunnel</string>
+        <string>--url</string>
+        <string>http://localhost:8765</string>
+        <string>--no-autoupdate</string>
+    </array>
+
+    <!-- Start automatically at login and keep running if it exits -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Restart throttle: don't respawn faster than every 10 seconds -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ollywarwick/Library/Logs/finances-dashboard-tunnel.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ollywarwick/Library/Logs/finances-dashboard-tunnel.error.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/ollywarwick</string>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

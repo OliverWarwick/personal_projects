@@ -27,19 +27,13 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/oliverwarwick/.local/bin/uv</string>
-        <string>run</string>
-        <string>--directory</string>
-        <string>/Users/oliverwarwick/playground/personal_projects</string>
-        <string>finances-dashboard</string>
-        <string>--auth-db</string>
-        <string>/Users/oliverwarwick/.config/personal_project/finances_auth.db</string>
-        <string>--port</string>
-        <string>8765</string>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>exec /opt/homebrew/bin/uv run --directory "$HOME/playground/personal_projects" finances-dashboard --auth-db "$HOME/.config/personal_project/finances_auth.db" --port 8765</string>
     </array>
 
     <key>WorkingDirectory</key>
-    <string>/Users/oliverwarwick/playground/personal_projects</string>
+    <string>/Users/ollywarwick/playground/personal_projects</string>
 
     <!-- Start automatically at login and keep running if it exits -->
     <key>RunAtLoad</key>
@@ -52,17 +46,25 @@
     <integer>10</integer>
 
     <key>StandardOutPath</key>
-    <string>/Users/oliverwarwick/Library/Logs/finances-dashboard.log</string>
+    <string>/Users/ollywarwick/Library/Logs/finances-dashboard.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/oliverwarwick/Library/Logs/finances-dashboard.error.log</string>
+    <string>/Users/ollywarwick/Library/Logs/finances-dashboard.error.log</string>
 
     <!-- Pass HOME so uv can find its cache and .env files -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
-        <string>/Users/oliverwarwick</string>
+        <string>/Users/ollywarwick</string>
         <key>PATH</key>
-        <string>/Users/oliverwarwick/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>IBKR_FLEX_TOKEN</key>
+        <string>159314639502259382181423</string>
+        <key>IBKR_FLEX_ACTIVITY_QUERY</key>
+        <string>1497297</string>
+        <key>HL_DATA_DIR</key>
+        <string>/Users/ollywarwick/dataprod/portfolio/hl</string>
+        <key>AJBELL_DATA_DIR</key>
+        <string>/Users/ollywarwick/dataprod/portfolio/ajbell</string>
     </dict>
 </dict>
 </plist>
