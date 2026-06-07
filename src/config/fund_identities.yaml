@@ -1,0 +1,163 @@
+# Fund-identity seed for portfolio look-through decomposition.
+#
+# Maps the broker codes we actually trade (and their ISINs, where a broker
+# supplies one) to the issuer holdings source that publishes the fund's full
+# constituent file. Each entry pairs with an issuer adapter in
+# src/clients/holdings/adapters/. A fund with no entry here, or whose issuer
+# has no adapter, stays in primary space with a recorded reason.
+#
+# Fields:
+#   issuer        adapter id (must match an entry in the adapter registry)
+#   product_id    issuer-specific product id (iShares numeric productId)
+#   ticker        fund ticker (also registered as a lookup alias)
+#   name          display name
+#   holdings_url  fully-qualified holdings file URL (verbatim; no templating)
+#   aliases       broker codes / ISINs that resolve to this fund
+#
+# Phase 1 seeds the three iShares lines we hold. Vanguard / Fidelity / L&G /
+# First Trust funds are intentionally absent until their adapters land — they
+# correctly fall back to "primary" with reason=no_adapter.
+
+funds:
+  - issuer: ishares
+    product_id: "251904"
+    ticker: IGUS
+    name: iShares S&P 500 GBP Hedged UCITS ETF (Acc)
+    holdings_url: "https://www.ishares.com/uk/individual/en/products/251904/ishares-sp-500-gbp-hedged-ucits-etf/1506575576011.ajax?fileType=csv&fileName=IGUS_holdings&dataType=fund"
+    aliases:
+      - IGUS
+      - IE00B3Y8X563
+
+  - issuer: ishares
+    product_id: "328657"
+    ticker: ISPE
+    name: iShares S&P 500 Equal Weight UCITS ETF
+    holdings_url: "https://www.ishares.com/uk/individual/en/products/328657/ishares-s-p-500-equal-weight-ucits-etf/1506575576011.ajax?fileType=csv&fileName=ISPE_holdings&dataType=fund"
+    aliases:
+      - ISPE
+
+  - issuer: ishares
+    product_id: "251807"
+    ticker: IUKD
+    name: iShares UK Dividend UCITS ETF
+    holdings_url: "https://www.ishares.com/uk/individual/en/products/251807/ishares-uk-dividend-ucits-etf/1506575576011.ajax?fileType=csv&fileName=IUKD_holdings&dataType=fund"
+    aliases:
+      - IUKD
+      - IE00B0M63060
+
+  # --- Vanguard (decomposed via the investor GraphQL gateway) ---------------
+  # product_id is the Vanguard portId; the VanguardAdapter resolves holdings
+  # from it. portIds discovered from vanguardinvestor.co.uk/api/productList.
+
+  - issuer: vanguard
+    product_id: "9694"
+    ticker: VUAG
+    name: Vanguard S&P 500 UCITS ETF (USD) Accumulating
+    aliases:
+      - VUAG
+      - IE00BFMXXD54
+
+  - issuer: vanguard
+    product_id: "9677"
+    ticker: VHYG
+    name: Vanguard FTSE All-World High Dividend Yield UCITS ETF (USD) Acc
+    aliases:
+      - VHYG
+
+  # --- Funds we hold but cannot yet decompose -------------------------------
+  # These have no holdings adapter, so they resolve to reason=no_adapter and
+  # stay in primary space. Seeding them here (rather than relying on a name
+  # heuristic) guarantees every held fund is *recognised* as a fund — none is
+  # silently passed through as if it were already an underlier — and records
+  # exactly which issuer adapter would unlock each one. Add an adapter (and the
+  # source id) to decompose; no other change needed.
+
+  # Fidelity MSCI World Index fund: no issuer-direct full-holdings feed exists
+  # (index OEIC, top-10 only). Decomposed by INDEX SUBSTITUTION — the holdings
+  # of iShares Core MSCI World UCITS ETF (SWDA), a full-replication MSCI World
+  # tracker, stand in as a proxy. The fund is GBP-hedged but the hedge is an FX
+  # overlay; the underlying equity constituents are the same MSCI World names.
+  # Results are flagged proxy-sourced (approximate) throughout the UI.
+  - issuer: index_proxy
+    product_id: fidelity-byx5p48
+    ticker: BYX5P48
+    name: Fidelity MSCI World Index Class P (Acc)
+    proxy_note: "iShares Core MSCI World (SWDA) — MSCI World proxy"
+    holdings_url: "https://www.ishares.com/uk/individual/en/products/251882/ishares-msci-world-ucits-etf/1506575576011.ajax?fileType=csv&fileName=SWDA_holdings&dataType=fund"
+    aliases:
+      - BYX5P48
+      - IE00BYX5P487
+
+  # Fidelity Europe Quality Income: smart-beta, no full-holdings feed or clean
+  # full-index proxy. Decomposed partially from its disclosed top-10.
+  - issuer: top_holdings
+    product_id: fidelity-feqp
+    ticker: FEQP
+    name: Fidelity Europe Quality Income UCITS ETF
+    yahoo_symbol: FEQP.L
+    aliases:
+      - FEQP
+
+  # L&G / First Trust / Fidelity Europe: no clean full-holdings feed (gated
+  # API / CMS-only / smart-beta with no proxy). Decomposed PARTIALLY from the
+  # disclosed top-10 (via Yahoo Finance), with the undisclosed remainder shown
+  # as its own bucket. RTWP is a diffuse Russell 2000 fund so its top-10 covers
+  # only ~8%; FCBR (concentrated cyber) covers ~60%; FEQP ~25%.
+  - issuer: top_holdings
+    product_id: lgim-rtwp
+    ticker: RTWP
+    name: L&G Russell 2000 US Small Cap Quality UCITS ETF
+    yahoo_symbol: RTWP.L
+    aliases:
+      - RTWP
+
+  - issuer: top_holdings
+    product_id: first-trust-fcbr
+    ticker: FCBR
+    name: First Trust Nasdaq Cybersecurity UCITS ETF
+    yahoo_symbol: FCBR.L
+    aliases:
+      - FCBR
+
+  # Active OEIC and closed-end trust: no machine-readable holdings feed and no
+  # Yahoo fund data, so their top-10 is HAND-SEEDED from the published factsheet
+  # (with as_of). This is the only available source — it goes stale, so refresh
+  # the weights/date when the factsheets update (roughly monthly). The
+  # undisclosed remainder is shown as its own bucket, same as the live top-10.
+  - issuer: static_top_holdings
+    product_id: franklin-bmf4sw8
+    ticker: BMF4SW8
+    name: FTF ClearBridge US Value Class W (Acc)
+    as_of: "2026-06-07"  # hand-entered from FT tearsheet (FT data is delayed/monthly)
+    top_holdings:
+      - {ticker: GOOGL, name: Alphabet Inc, weight: 4.52}
+      - {ticker: JNJ, name: Johnson & Johnson, weight: 3.77}
+      - {ticker: BAC, name: Bank of America Corp, weight: 3.42}
+      - {ticker: CVX, name: Chevron Corp, weight: 3.37}
+      - {ticker: AMZN, name: Amazon.com Inc, weight: 2.38}
+      - {ticker: EQT, name: EQT Corp, weight: 2.32}
+      - {ticker: COP, name: ConocoPhillips, weight: 2.18}
+      - {ticker: MU, name: Micron Technology Inc, weight: 2.12}
+      - {ticker: DIS, name: Walt Disney Co, weight: 2.09}
+      - {ticker: SLB, name: SLB, weight: 2.08}
+    aliases:
+      - BMF4SW8
+
+  - issuer: static_top_holdings
+    product_id: it-cty
+    ticker: CTY
+    name: City of London Investment Trust
+    as_of: "2026-04-30"  # hand-entered from AIC factsheet
+    top_holdings:
+      - {ticker: HSBA, name: HSBC Holdings PLC, weight: 6.5}
+      - {ticker: SHEL, name: Shell PLC, weight: 5.1}
+      - {ticker: BATS, name: British American Tobacco PLC, weight: 4.1}
+      - {ticker: BA, name: BAE Systems PLC, weight: 4.0}
+      - {ticker: NWG, name: NatWest Group PLC, weight: 3.7}
+      - {ticker: TSCO, name: Tesco PLC, weight: 3.4}
+      - {ticker: LLOY, name: Lloyds Banking Group PLC, weight: 3.4}
+      - {ticker: AZN, name: AstraZeneca PLC, weight: 3.3}
+      - {ticker: ULVR, name: Unilever PLC, weight: 3.2}
+      - {ticker: BP, name: BP PLC, weight: 3.2}
+    aliases:
+      - CTY

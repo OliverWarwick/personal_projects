@@ -31,11 +31,19 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
+from src.apps.finances_dashboard._lookthrough import (
+    ProvenanceNote,
+    UnderlierRow,
+    decompose_portfolio,
+)
 from src.apps.finances_dashboard.config import (
+    BrokerEntry,
     DashboardConfig,
     UserEntry,
     load_config,
 )
+from src.clients.holdings import build_default_client, load_fund_identities
+from src.clients.holdings.models import reason_text
 from src.clients.marketdata.cache import CachedYFinanceClient
 from src.clients.marketdata.yfinance_client import (
     MarketDataError,
@@ -1109,6 +1117,12 @@ def _build_app(  # noqa: PLR0915
     synthetic_statements = {**hl_statements, **ajbell_statements}
     synthetic_prefixes = (HL_ACCOUNT_PREFIX, AJBELL_ACCOUNT_PREFIX)
 
+    # Fund look-through: one cached holdings client + identity seed, shared
+    # across requests. Fetches are gated behind a parquet cache so the
+    # underlier view never blocks the dashboard on an issuer download.
+    holdings_client = build_default_client()
+    fund_identities = load_fund_identities()
+
     # ------------------------------------------------------------------
     # Per-request helpers
     # ------------------------------------------------------------------
@@ -1203,8 +1217,13 @@ def _build_app(  # noqa: PLR0915
         return RedirectResponse(url=f"/account/{result.first_account_id()}")
 
     @app.get("/account/{account_id}", response_class=HTMLResponse)
-    def index(request: Request, account_id: str) -> Any:  # pyright: ignore[reportUnusedFunction]
-        """Render the dashboard page for ``account_id``."""
+    def index(request: Request, account_id: str, view: str = "primary") -> Any:  # pyright: ignore[reportUnusedFunction]
+        """Render the dashboard page for ``account_id``.
+
+        ``view`` selects the open-positions space: ``"primary"`` (default,
+        one row per held instrument) or ``"underlier"`` (funds decomposed
+        into constituents and rolled up across the portfolio).
+        """
         result = _auth_check(request)
         if isinstance(result, RedirectResponse):
             return result
@@ -1222,6 +1241,14 @@ def _build_app(  # noqa: PLR0915
             positions = _aggregate_position_rows(leaf_positions)
         else:
             positions = _open_positions(stmt)
+        underliers: list[UnderlierRow] = []
+        notes: list[ProvenanceNote] = []
+        if view == "underlier":
+            # Single entry point: decompose the portfolio into exposures ranked
+            # by value. Aggregation across accounts happens inside.
+            underliers, notes = decompose_portfolio(
+                positions, client=holdings_client, identities=fund_identities,
+            )
         closed = _closed_positions(stmt)
         timeline = _build_timeline(
             stmt,
@@ -1240,7 +1267,10 @@ def _build_app(  # noqa: PLR0915
             else {}
         )
         stats = _summarise(timeline, deposit_events, rf_returns)
-        return _render_html(account_id, base, stats, positions, closed, timeline, user_config)
+        return _render_html(
+            account_id, base, stats, positions, closed, timeline, user_config,
+            view=view, underliers=underliers, notes=notes,
+        )
 
     symbol_cache: dict[str, dict[str, Any]] = {}
 
@@ -1477,6 +1507,26 @@ def _render_login_html(error: str | None) -> str:
 </html>"""
 
 
+def _clean_underlier_name(name: str) -> str:
+    """Tidy a holding name for display in the underlier table.
+
+    Strips broker annotations that clutter HL/IBKR descriptions: trailing
+    ``*R`` / ``*2`` footnote markers and share-class noise such as
+    ``EUR0.09`` / ``GBP0.01`` par-value tokens.
+    """
+    ccy_codes = ("EUR", "GBP", "USD")
+    cleaned: list[str] = []
+    for tok in name.split():
+        if tok.startswith("*"):
+            continue
+        upper = tok.upper()
+        # Drop par-value share-class tokens like "EUR0.09" / "GBP0.01".
+        if any(upper.startswith(c) and upper[len(c) :][:1].isdigit() for c in ccy_codes):
+            continue
+        cleaned.append(tok)
+    return " ".join(cleaned) or name
+
+
 def _render_html(
     account_id: str,
     base: str,
@@ -1485,8 +1535,14 @@ def _render_html(
     closed: list[ClosedRow],
     timeline: list[TimelineRow],
     config: DashboardConfig,
+    *,
+    view: str = "primary",
+    underliers: list[UnderlierRow] | None = None,
+    notes: list[ProvenanceNote] | None = None,
 ) -> str:
     """Render the dashboard HTML with embedded JSON data."""
+    underliers = underliers or []
+    notes = notes or []
     total_pnl = stats.unrealized + stats.realized
     pnl_pct = (
         total_pnl / stats.total_invested * Decimal(100)
@@ -1726,6 +1782,146 @@ def _render_html(
 
     pos_rows = "".join(_render_position_block(p) for p in positions)
 
+    # ------------------------------------------------------------------
+    # Underlier (look-through) view
+    # ------------------------------------------------------------------
+    def _split_cell(value: Decimal) -> str:
+        return f"{value:,.0f}" if value else "<span class='muted'>—</span>"
+
+    def _underlier_rows_html() -> str:
+        if not underliers:
+            return "<tr><td colspan='6' class='empty'>No underlier data.</td></tr>"
+        out: list[str] = []
+        for u in underliers:
+            contributors = ", ".join(
+                f"{lbl} {_signed_gbp(val).lstrip('+')}" for lbl, val in u.contributors
+            )
+            name = _clean_underlier_name(u.name)
+            ticker = u.ticker or "—"
+            row_cls = ""
+            if u.is_residual:
+                label = "undisclosed" if u.reason == "partial_remainder" else "primary"
+                badge = (
+                    f"<span class='resid-badge' title=\"{reason_text(u.reason)}\">"
+                    f"{label}</span>"
+                )
+                name_cell = f"{name} {badge}"
+                repl_cell = est_cell = "<span class='muted'>—</span>"
+                row_cls = " class='resid-row'"
+            else:
+                if u.from_proxy:
+                    badge = (
+                        "<span class='proxy-badge' title='Estimated — decomposed "
+                        "via an index proxy, not the fund's actual holdings'>"
+                        "≈ proxy</span>"
+                    )
+                elif u.from_partial:
+                    badge = (
+                        "<span class='proxy-badge' title='Estimated — from a "
+                        "fund's disclosed top-10 holdings only'>≈ top-10</span>"
+                    )
+                else:
+                    badge = ""
+                name_cell = f"{name} {badge}" if badge else name
+                repl_cell = _split_cell(u.value_exact)
+                est_cell = _split_cell(u.value_approx)
+            out.append(
+                f"<tr{row_cls} title=\"{contributors}\">"
+                f"<td class='mono'>{ticker}</td>"
+                f"<td>{name_cell}</td>"
+                f"<td class='num'>{repl_cell}</td>"
+                f"<td class='num approx'>{est_cell}</td>"
+                f"<td class='num'>{u.value_base:,.0f}</td>"
+                f"<td class='num'>{u.weight_pct:.2f}%</td></tr>",
+            )
+        return "".join(out)
+
+    underlier_rows = _underlier_rows_html()
+    decomposed_notes = [n for n in notes if n.decomposed]
+    residual_notes = [n for n in notes if not n.decomposed]
+    fund_count = len(notes)
+    total_underlier_value = sum((u.value_base for u in underliers), Decimal(0))
+    # Count a partial (top-10) fund only by its disclosed coverage, since its
+    # undisclosed remainder is not actually decomposed.
+    decomposed_value = sum(
+        (
+            n.value_base * n.coverage if n.partial else n.value_base
+            for n in decomposed_notes
+        ),
+        Decimal(0),
+    )
+    pct_decomposed = (
+        decomposed_value / total_underlier_value * Decimal(100)
+        if total_underlier_value
+        else Decimal(0)
+    )
+    proxy_notes = [n for n in decomposed_notes if n.proxy]
+    partial_notes = [n for n in decomposed_notes if n.partial]
+    if fund_count:
+        residual_detail = (
+            " (" + ", ".join(f"{n.ticker}: {n.reason}" for n in residual_notes) + ")"
+            if residual_notes
+            else ""
+        )
+        method_bits: list[str] = []
+        if proxy_notes:
+            method_bits.append(f"{len(proxy_notes)} via index proxy")
+        if partial_notes:
+            method_bits.append(f"{len(partial_notes)} via top-10")
+        method_clause = f" ({', '.join(method_bits)})" if method_bits else ""
+        approx_bits = [
+            f"{n.ticker} ≈ {n.proxy_note or 'index proxy'}" for n in proxy_notes
+        ] + [
+            f"{n.ticker}: top-10 covers {n.coverage * Decimal(100):.0f}%"
+            + (f" (as of {n.as_of})" if n.as_of else "")
+            for n in partial_notes
+        ]
+        approx_detail = " " + "; ".join(approx_bits) + "." if approx_bits else ""
+        underlier_summary = (
+            f"Decomposed {len(decomposed_notes)} of {fund_count} funds"
+            f"{method_clause}; {len(residual_notes)} remain primary{residual_detail}. "
+            f"{pct_decomposed:.0f}% of portfolio value decomposed.{approx_detail}"
+        )
+    else:
+        underlier_summary = "No funds held — every position is already an underlier."
+
+    def _view_link(target: str, label: str) -> str:
+        active = " active" if view == target else ""
+        suffix = "" if target == "primary" else f"?view={target}"
+        return f"<a class='view-tab{active}' href='/account/{account_id}{suffix}'>{label}</a>"
+
+    view_toggle = (
+        "<span class='view-toggle'>"
+        + _view_link("primary", "Primary")
+        + _view_link("underlier", "Underliers")
+        + "</span>"
+    )
+    if view == "underlier":
+        open_positions_block = (
+            f"<div class='card-head'><h2>Exposures</h2>{view_toggle}</div>"
+            f"<p class='underlier-summary'>{underlier_summary}</p>"
+            "<table class='sortable underliers'>"
+            "<thead><tr><th>Ticker</th><th>Underlier</th>"
+            f"<th class='num' title='Value held via real holdings — full fund "
+            f"holdings and direct positions'>Replicated ({base})</th>"
+            f"<th class='num' title='Value inferred via index proxy or disclosed "
+            f"top-10'>Estimated ({base})</th>"
+            f"<th class='num'>Total ({base})</th><th class='num'>Weight</th>"
+            "</tr></thead>"
+            f"<tbody>{underlier_rows}</tbody></table>"
+        )
+    else:
+        open_positions_block = (
+            f"<div class='card-head'><h2>Open Positions</h2>{view_toggle}</div>"
+            '<table class="sortable">'
+            "<thead><tr><th>Ticker</th><th>Ccy</th><th>Last Buy</th>"
+            '<th class="num">Qty</th><th class="num">Avg</th><th class="num">Mark</th>'
+            '<th class="num">Δ Unit</th><th class="num">Ret %</th>'
+            '<th class="num">CAGR</th>'
+            f'<th class="num">Val ({base})</th><th class="num">Unrl ({base})</th></tr></thead>'
+            f"<tbody>{pos_rows}</tbody></table>"
+        )
+
     def _closed_ret(c: ClosedRow) -> Decimal:
         return (c.close_price / c.open_price - 1) * 100 if c.open_price else Decimal(0)
 
@@ -1888,7 +2084,7 @@ def _render_html(
                         border-bottom: 1px solid var(--border); padding-bottom:4px; }}
   #detail-empty {{ color:var(--muted); font-family:var(--mono); font-size:12px;
                    text-align:center; padding: 80px 20px; font-style: italic; }}
-  .widgets {{ display:grid; grid-template-columns: repeat(8, 1fr); gap: 8px; margin-bottom: 10px; }}
+  .widgets {{ display:grid; grid-template-columns: repeat(9, 1fr); gap: 8px; margin-bottom: 10px; }}
   .widget {{ background: var(--panel); border:1px solid var(--border); border-radius:4px;
              padding: 7px 10px; display:flex; flex-direction:column; gap:1px; }}
   .widget.widget-2col {{ flex-direction:row; gap:14px; }}
@@ -1926,6 +2122,12 @@ def _render_html(
                   padding: 4px 10px; font-family: var(--mono); font-size: 10.5px;
                   letter-spacing: .08em; text-transform: uppercase; cursor: pointer; }}
   .nav-trigger:hover {{ color: var(--accent); border-color: var(--accent); }}
+  .logout-btn {{ background: transparent; color: var(--muted);
+                 border: 1px solid var(--border); border-radius: 3px;
+                 padding: 4px 10px; font-family: var(--mono); font-size: 10.5px;
+                 letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+                 text-decoration: none; }}
+  .logout-btn:hover {{ color: var(--neg); border-color: var(--neg); }}
   .nav-popover {{ display: none; position: absolute; right: 0; top: calc(100% + 6px);
                   background: var(--panel); border: 1px solid var(--border);
                   border-radius: 4px; padding: 10px 12px; min-width: 220px;
@@ -1955,6 +2157,22 @@ def _render_html(
   .nav-acct-id {{ font-size: 11px; }}
   .nav-acct-label {{ font-size: 9.5px; color: var(--muted); }}
   .nav-acct.active .nav-acct-label {{ color: var(--accent); opacity:0.7; }}
+  .view-toggle {{ display:inline-flex; gap:4px; }}
+  .view-tab {{ font-size:11px; padding:3px 9px; border:1px solid var(--border);
+               border-radius:3px; color:var(--muted); text-decoration:none; }}
+  .view-tab.active {{ color:var(--accent); border-color:var(--accent); }}
+  .underlier-summary {{ font-size:11px; color:var(--muted); margin:6px 0 10px;
+                        font-family:var(--mono); }}
+  td.mono {{ font-family:var(--mono); font-size:11px; color:var(--muted); }}
+  .resid-row td {{ color:var(--muted); }}
+  .resid-badge {{ font-size:9.5px; color:var(--accent); border:1px solid var(--border);
+                  border-radius:3px; padding:1px 5px; margin-left:6px; }}
+  .proxy-badge {{ font-size:9.5px; color:var(--muted); border:1px dashed var(--border);
+                  border-radius:3px; padding:1px 5px; margin-left:6px; }}
+  td.approx {{ color: var(--muted); }}
+  table.underliers td:nth-child(2) {{ max-width: 300px; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }}
+  table.underliers th:first-child, table.underliers td:first-child {{ width: 64px; }}
 </style>
 </head>
 <body>
@@ -1965,22 +2183,13 @@ def _render_html(
     <button id="nav-trigger" class="nav-trigger" aria-haspopup="true" aria-expanded="false">Accounts ▾</button>
     {nav_html}
   </span>
+  <a href="/logout" class="logout-btn">Sign out</a>
 </header>
 {widgets_html}
 <div class="grid">
   <div class="card">
-    <h2>Open Positions</h2>
     <div class="tables-scroll">
-      <table class="sortable">
-        <thead><tr><th>Ticker</th><th>Ccy</th>
-          <th>Last Buy</th>
-          <th class="num">Qty</th><th class="num">Avg</th><th class="num">Mark</th>
-          <th class="num">Δ Unit</th>
-          <th class="num">Ret %</th>
-          <th class="num">CAGR</th>
-          <th class="num">Val ({base})</th><th class="num">Unrl ({base})</th></tr></thead>
-        <tbody>{pos_rows}</tbody>
-      </table>
+      {open_positions_block}
       <h2 style="margin-top:18px;">Closed Positions</h2>
       <table class="sortable">
         <thead><tr><th>Date</th><th>Ticker</th><th>Exch</th><th>Ccy</th>
